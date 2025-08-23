@@ -13,5 +13,5 @@
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
-, "app/(tabs)/index.jsx", "app/(tabs)/profile.jsx"  ]
+, "app/screens/ListingsScreen.tsx", "app/screens/ProfileScreen.tsx", "app/_layout.tsx", "app/+not-found.tsx", "app/auth/signUpScreen.jsx", "app/screens/_layout.tsx"  ]
 }
