@@ -38,8 +38,8 @@ export default function ChatListScreen({ navigation }: any) {
       .from("chats")
       .select(
         `id,
-    buyer:buyer_id ( id, username, avatar_url ),
-    seller:seller_id ( id, username, avatar_url )`
+        buyer:buyer_id ( id, username, avatar_url ),
+        seller:seller_id ( id, username, avatar_url )`
       )
 
       .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
@@ -51,7 +51,6 @@ export default function ChatListScreen({ navigation }: any) {
       setChats(data || []);
     }
     setLoading(false);
-    
   };
 
   const renderItem = ({ item }: any) => {
