@@ -34,19 +34,14 @@ export default function ChatListScreen({ navigation }: any) {
 
     // Fetch chats where current user is buyer or seller. Join listing + the other profile
     const { data, error } = await supabase
+
       .from("chats")
       .select(
-        `
-        id,
-        listing_id,
-        buyer_id,
-        seller_id,
-        created_at,
-        listings ( id, title, thumbnail_url ),
-        buyer:profiles!chats_buyer_id_fkey ( id, username, avatar_url ),
-        seller:profiles!chats_seller_id_fkey ( id, username, avatar_url )
-      `
+        `id,
+    buyer:buyer_id ( id, username, avatar_url ),
+    seller:seller_id ( id, username, avatar_url )`
       )
+
       .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
       .order("created_at", { ascending: false });
 
@@ -56,6 +51,7 @@ export default function ChatListScreen({ navigation }: any) {
       setChats(data || []);
     }
     setLoading(false);
+    
   };
 
   const renderItem = ({ item }: any) => {

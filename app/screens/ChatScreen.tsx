@@ -76,6 +76,7 @@ export default function ChatScreen({ route }: any) {
     } else {
       setText("");
       // realtime will append the saved message
+      loadMessages();
     }
   };
 
@@ -131,15 +132,26 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
   msgRow: { marginBottom: 10, padding: 10, borderRadius: 10, maxWidth: "80%" },
   msgMine: { alignSelf: "flex-end", backgroundColor: "#2563eb" },
-  msgOther: { alignSelf: "flex-start", backgroundColor: "#f1f1f1" },
+  msgOther: {
+    alignSelf: "flex-start",
+    backgroundColor: "#f1f1f1",
+  },
   msgTextMine: { color: "#fff" },
-  msgTextOther: { color: "#111" },
-  msgTime: { fontSize: 10, color: "#666", marginTop: 6, textAlign: "right" },
+  msgTextOther: {
+    color: "#111",
+  },
+  msgTime: {
+    fontSize: 10,
+    color: "#666",
+    marginTop: 6,
+    textAlign: "right",
+  },
   inputRow: {
     flexDirection: "row",
     padding: 10,
     borderTopWidth: 1,
     borderColor: "#eee",
+    marginBottom: 15,
   },
   input: {
     flex: 1,
