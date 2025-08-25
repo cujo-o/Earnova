@@ -12,6 +12,8 @@ import ChatScreen from "./screens/ChatScreen";
 import HomeScreen from "./screens/HomeScreen";
 import ProductDetailsScreen from "@/components/mods/ProductDetailsScreen";
 import EditListingScreen from "@/components/mods/EditListingScreen";
+import EditProfileScreen from "@/components/mods/EditProfileScreen";
+import ChatListScreen from "@/components/mods/ChatListScreen";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -23,7 +25,7 @@ function Tabs() {
       <Tab.Screen name="Explore" component={ListingsScreen} />
       <Tab.Screen name="AddPost" component={AddPostScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
-      <Tab.Screen name="chat" component={ChatScreen} />
+      <Tab.Screen name="chats" component={ChatListScreen} />
     </Tab.Navigator>
   );
 }
@@ -44,6 +46,7 @@ function RootNavigator() {
       <Stack.Screen name="ProductDetails" component={ProductDetailsScreen} />
       <Stack.Screen name="ChatScreen" component={ChatScreen} />
       <Stack.Screen name="EditListing" component={EditListingScreen} />
+      <Stack.Screen name="EditProfile" component={EditProfileScreen}/>
     </Stack.Navigator>
   );
 }
