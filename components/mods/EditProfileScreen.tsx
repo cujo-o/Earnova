@@ -150,8 +150,8 @@ export default function EditProfileScreen({ navigation }: any) {
         .from("profiles")
         .update({
           username: username.trim(),
-          full_name: fullName.trim() || null,
-          bio: bio.trim() || null,
+          full_name: fullName.trim(),
+          bio: bio.trim(),
           avatar_url: avatarUrl || null,
         })
         .eq("id", user.id);

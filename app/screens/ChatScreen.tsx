@@ -1,5 +1,5 @@
 // screens/ChatScreen.tsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,9 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
+  AppState,
+  AppStateStatus,
 } from "react-native";
 import { supabase } from "@/lib/supabase";
 
@@ -16,20 +19,47 @@ export default function ChatScreen({ route }: any) {
   const { chatId } = route.params;
   const [messages, setMessages] = useState<any[]>([]);
   const [text, setText] = useState("");
+  const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
-  const flatListRef = useRef<FlatList>(null);
+  const flatRef = useRef<FlatList | null>(null);
+  const subscriptionRef = useRef<any | null>(null);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const { data: userResp } = await supabase.auth.getUser();
-      setUserId(userResp?.user?.id ?? null);
-      await loadMessages();
-    })();
+  // fetch current messages
+  const fetchMessages = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("chat_id", chatId)
+        .order("created_at", { ascending: true });
 
-    // subscribe to new messages for this chat
+      if (error) {
+        console.warn("fetchMessages error:", error.message ?? error);
+        return;
+      }
+      if (data) {
+        setMessages(data);
+        setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
+      }
+    } catch (e) {
+      console.error("fetchMessages unexpected error:", e);
+    }
+  };
+
+  // subscribe to realtime inserts for this chat
+  const subscribeToMessages = () => {
+    // remove existing subscription first
+    if (subscriptionRef.current) {
+      supabase.removeChannel(subscriptionRef.current).catch((e) => {
+        console.warn("removeChannel failed", e);
+      });
+      subscriptionRef.current = null;
+    }
+
+    const channelName = `chat-${chatId}`;
     const channel = supabase
-      .channel(`chat-${chatId}`)
+      .channel(channelName)
       .on(
         "postgres_changes",
         {
@@ -39,55 +69,141 @@ export default function ChatScreen({ route }: any) {
           filter: `chat_id=eq.${chatId}`,
         },
         (payload) => {
-          setMessages((prev) => [...prev, payload.new]);
-          // auto-scroll later
+          const incoming = payload.new as any;
+
+          // append incoming if not present, and remove optimistic placeholder(s)
+          setMessages((prev) => {
+            // already have this row?
+            if (prev.some((m) => m.id === incoming.id)) return prev;
+
+            // remove optimistic placeholder that matches content & sender
+            const withoutTemp = prev.filter(
+              (m) =>
+                !(
+                  typeof m.id === "string" &&
+                  m.id.startsWith("tmp-") &&
+                  m.content === incoming.content &&
+                  m.sender_id === incoming.sender_id
+                )
+            );
+
+            return [...withoutTemp, incoming];
+          });
+
+          // auto-scroll
+          setTimeout(
+            () => flatRef.current?.scrollToEnd({ animated: true }),
+            50
+          );
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // status callback helpful for debugging connection state
+        // console.log("channel status:", status);
+      });
 
-    return () => {
-      supabase.removeChannel(channel);
-      mounted = false;
-    };
-  }, [chatId]);
-
-  const loadMessages = async () => {
-    const { data, error } = await supabase
-      .from("messages")
-      .select("id,content,sender_id,created_at")
-      .eq("chat_id", chatId)
-      .order("created_at", { ascending: true });
-
-    if (!error) setMessages(data || []);
+    subscriptionRef.current = channel;
   };
 
-  const sendMessage = async () => {
-    if (!text.trim()) return;
-    const { data: userResp } = await supabase.auth.getUser();
-    const uid = userResp?.user?.id;
-    if (!uid) return;
+  useEffect(() => {
+    let mounted = true;
 
+    const init = async () => {
+      setLoading(true);
+
+      // get current user id
+      const { data: userResp } = await supabase.auth.getUser();
+      const uid = userResp?.user?.id ?? null;
+      if (mounted) setUserId(uid);
+
+      // initial load
+      await fetchMessages();
+
+      // subscribe
+      subscribeToMessages();
+
+      // AppState listener to resync on foreground (helps if subscription dropped)
+      const onAppStateChange = (next: AppStateStatus) => {
+        if (
+          appStateRef.current.match(/inactive|background/) &&
+          next === "active"
+        ) {
+          // app came to foreground — refetch and re-subscribe
+          fetchMessages().catch((e) =>
+            console.warn("refetch on resume failed", e)
+          );
+          subscribeToMessages();
+        }
+        appStateRef.current = next;
+      };
+
+      const sub = AppState.addEventListener("change", onAppStateChange);
+
+      if (mounted) setLoading(false);
+
+      // cleanup
+      return () => {
+        sub.remove();
+        if (subscriptionRef.current) {
+          supabase
+            .removeChannel(subscriptionRef.current)
+            .catch((e) => console.warn("removeChan err", e));
+          subscriptionRef.current = null;
+        }
+      };
+    };
+
+    // run init and hold cleanup function
+    const cleanupPromise = init();
+
+    return () => {
+      mounted = false;
+      // ensure cleanupPromise resolves and removes subscription
+      cleanupPromise.then((maybeCleanup) => {
+        /* no-op: init handles removal */
+      });
+    };
+  }, [chatId]); // re-run when chatId changes
+
+  const sendMessage = async () => {
+    if (!text.trim() || !userId) return;
+
+    const content = text.trim();
+    setText("");
+
+    // optimistic UI: add a temp message so sender sees it straight away
+    const tmpId = `tmp-${Date.now()}`;
+    const optimistic = {
+      id: tmpId,
+      chat_id: chatId,
+      sender_id: userId,
+      content,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
+
+    // insert -> subscription will deliver the real row and we remove the optimistic placeholder in handler
     const { error } = await supabase
       .from("messages")
-      .insert([{ chat_id: chatId, sender_id: uid, content: text.trim() }]);
+      .insert([{ chat_id: chatId, sender_id: userId, content }]);
 
     if (error) {
-      console.error("send message error", error);
-    } else {
-      setText("");
-      // realtime will append the saved message
-      loadMessages();
+      console.error("sendMessage error:", error);
+      // remove optimistic if insert failed
+      setMessages((prev) => prev.filter((m) => m.id !== tmpId));
     }
+    // no explicit fetch here — subscription will handle it
   };
 
   const renderItem = ({ item }: any) => {
     const mine = item.sender_id === userId;
     return (
-      <View style={[styles.msgRow, mine ? styles.msgMine : styles.msgOther]}>
-        <Text style={mine ? styles.msgTextMine : styles.msgTextOther}>
+      <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
+        <Text style={mine ? styles.mineText : styles.theirsText}>
           {item.content}
         </Text>
-        <Text style={styles.msgTime}>
+        <Text style={styles.time}>
           {new Date(item.created_at).toLocaleTimeString([], {
             hour: "2-digit",
             minute: "2-digit",
@@ -97,19 +213,21 @@ export default function ChatScreen({ route }: any) {
     );
   };
 
+  if (loading) return <ActivityIndicator style={{ flex: 1 }} />;
+
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={{ flex: 1 }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <FlatList
-        ref={flatListRef}
+        ref={flatRef}
         data={messages}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.id.toString()}
         renderItem={renderItem}
         contentContainerStyle={{ padding: 12 }}
         onContentSizeChange={() =>
-          flatListRef.current?.scrollToEnd({ animated: true })
+          flatRef.current?.scrollToEnd({ animated: true })
         }
       />
 
@@ -129,18 +247,27 @@ export default function ChatScreen({ route }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  msgRow: { marginBottom: 10, padding: 10, borderRadius: 10, maxWidth: "80%" },
-  msgMine: { alignSelf: "flex-end", backgroundColor: "#2563eb" },
-  msgOther: {
+  bubble: {
+    marginBottom: 8,
+    padding: 10,
+    borderRadius: 10,
+    maxWidth: "80%",
+  },
+  mine: {
+    alignSelf: "flex-end",
+    backgroundColor: "#2563eb",
+  },
+  theirs: {
     alignSelf: "flex-start",
     backgroundColor: "#f1f1f1",
   },
-  msgTextMine: { color: "#fff" },
-  msgTextOther: {
+  mineText: {
+    color: "#fff",
+  },
+  theirsText: {
     color: "#111",
   },
-  msgTime: {
+  time: {
     fontSize: 10,
     color: "#666",
     marginTop: 6,
@@ -151,7 +278,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderTopWidth: 1,
     borderColor: "#eee",
-    marginBottom: 15,
+    marginBottom: 25,
   },
   input: {
     flex: 1,
