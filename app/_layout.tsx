@@ -1,8 +1,14 @@
-import React from "react";
-import { NavigationContainer } from "@react-navigation/native";
+// layout.tsx  (root app entry)
+import React, { useEffect, useState } from "react";
+import { View, ActivityIndicator } from "react-native";
+import {
+  NavigationContainer,
+  NavigationIndependentTree,
+} from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { AuthProvider, useAuth } from "@/lib/auth";
+import { supabase } from "@/lib/supabase";
+import { AuthProvider } from "@/lib/auth";
 
 import AuthScreen from "./auth/AuthScreen";
 import ListingsScreen from "./screens/ListingsScreen";
@@ -14,6 +20,8 @@ import ProductDetailsScreen from "@/components/mods/ProductDetailsScreen";
 import EditListingScreen from "@/components/mods/EditListingScreen";
 import EditProfileScreen from "@/components/mods/EditProfileScreen";
 import ChatListScreen from "@/components/mods/ChatListScreen";
+import RoommateSwipeScreen from "./screens/RoommateSwipeScreen";
+import CreateProfileModal from "@/components/mods/CreateProfileModal";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -24,30 +32,133 @@ function Tabs() {
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Explore" component={ListingsScreen} />
       <Tab.Screen name="AddPost" component={AddPostScreen} />
-      <Tab.Screen name="Profile" component={ProfileScreen} />
+      <Tab.Screen name="RoommateSwipe" component={RoommateSwipeScreen} />
       <Tab.Screen name="chats" component={ChatListScreen} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }
 
 function RootNavigator() {
-  const { user, loading } = useAuth();
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
-  if (loading) return null; // could show splash
+  useEffect(() => {
+    let mounted = true;
+
+    const init = async () => {
+      setLoading(true);
+      // get the current user (if any)
+      const { data } = await supabase.auth.getUser();
+      const u = data?.user ?? null;
+      if (!mounted) return;
+      setUser(u);
+      if (u) {
+        setCurrentUserId(u.id);
+        // check for profile
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("id", u.id)
+          .maybeSingle();
+        setShowProfileModal(!profile);
+      } else {
+        setShowProfileModal(false);
+        setCurrentUserId(null);
+      }
+      setLoading(false);
+    };
+
+    init();
+
+    // subscribe to auth changes
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        const u = session?.user ?? null;
+        setUser(u);
+        if (!u) {
+          setShowProfileModal(false);
+          setCurrentUserId(null);
+        } else {
+          setCurrentUserId(u.id);
+          (async () => {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("id")
+              .eq("id", u.id)
+              .maybeSingle();
+            setShowProfileModal(!profile);
+          })();
+        }
+      }
+    );
+
+    return () => {
+      mounted = false;
+      // cleanup listener
+      listener?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  // called after profile created inside modal
+  const handleProfileCreated = async () => {
+    // re-check profile and then hide modal
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", currentUserId)
+      .maybeSingle();
+
+    setShowProfileModal(!profile);
+  };
+
+  if (loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#fff",
+        }}
+      >
+        <ActivityIndicator size="large" color="#2563eb" />
+      </View>
+    );
+  }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {user ? (
-        <Stack.Screen name="Tabs" component={Tabs} />
-      ) : (
-        <Stack.Screen name="Auth" component={AuthScreen} />
-      )}
+    <NavigationIndependentTree>
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          {user ? (
+            <Stack.Screen name="Tabs" component={Tabs} />
+          ) : (
+            <Stack.Screen name="Auth" component={AuthScreen} />
+          )}
 
-      <Stack.Screen name="ProductDetails" component={ProductDetailsScreen} />
-      <Stack.Screen name="ChatScreen" component={ChatScreen} />
-      <Stack.Screen name="EditListing" component={EditListingScreen} />
-      <Stack.Screen name="EditProfile" component={EditProfileScreen}/>
-    </Stack.Navigator>
+          <Stack.Screen
+            name="ProductDetails"
+            component={ProductDetailsScreen}
+          />
+          <Stack.Screen name="ChatScreen" component={ChatScreen} />
+          <Stack.Screen name="EditListing" component={EditListingScreen} />
+          <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+        </Stack.Navigator>
+
+        {/* Modal overlay — forced when showProfileModal is true */}
+        {user && currentUserId && (
+          <CreateProfileModal
+            visible={showProfileModal}
+            userId={currentUserId}
+            requireComplete={true}
+            onCreated={handleProfileCreated}
+          />
+        )}
+      </NavigationContainer>
+    </NavigationIndependentTree>
   );
 }
 

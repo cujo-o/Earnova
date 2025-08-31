@@ -7,115 +7,119 @@ import {
   TouchableOpacity,
   Image,
   StyleSheet,
-  Alert,
   ActivityIndicator,
+  Alert,
   ScrollView,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "@/lib/supabase";
+import { Platform } from "react-native";
 
 export default function EditProfileScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<any>(null);
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
-  const [bio, setBio] = useState("");
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
-  const [initialAvatarUrl, setInitialAvatarUrl] = useState<string | null>(null);
+  const [searchingRoommate, setSearchingRoommate] = useState(false);
+  const [location, setLocation] = useState("");
+  const [age, setAge] = useState("");
+  const [religion, setReligion] = useState("");
+  const [department, setDepartment] = useState("");
+  const [bio, setBio] = useState("");
 
   useEffect(() => {
     load();
   }, []);
 
-  async function load() {
+  const load = async () => {
     setLoading(true);
-    try {
-      const { data: userResp } = await supabase.auth.getUser();
-      const user = userResp?.user;
-      if (!user) {
-        Alert.alert("Not signed in");
-        setLoading(false);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("username, full_name, bio, avatar_url")
-        .eq("id", user.id)
-        .single();
-
-      if (error && error.code !== "PGRST116") {
-        console.warn("profile select error:", error.message);
-      }
-
-      if (!data) {
-        // create empty profile if missing
-        const defaultUsername = user.email ? user.email.split("@")[0] : user.id;
-        await supabase
-          .from("profiles")
-          .upsert({ id: user.id, username: defaultUsername });
-        setUsername(defaultUsername);
-        setFullName("");
-        setBio("");
-        setInitialAvatarUrl(null);
-      } else {
-        setUsername(data.username ?? "");
-        setFullName(data.full_name ?? "");
-        setBio(data.bio ?? "");
-        setInitialAvatarUrl(data.avatar_url ?? null);
-      }
-    } catch (e: any) {
-      console.error("load profile error", e);
-      Alert.alert("Error", "Could not load profile");
-    } finally {
+    const { data: userResp } = await supabase.auth.getUser();
+    const uid = userResp?.user?.id;
+    if (!uid) {
+      Alert.alert("Not signed in");
       setLoading(false);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", uid)
+      .maybeSingle();
+    if (error) {
+      console.error("load profile error", error);
+    } else if (data) {
+      setProfile(data);
+      setUsername(data.username || "");
+      setFullName(data.full_name || "");
+      setAvatarUri(data.avatar_url || null);
+      setSearchingRoommate(!!data.searching_roommate);
+      setLocation(data.location || "");
+      setAge(data.age ? String(data.age) : "");
+      setReligion(data.religion || "");
+      setDepartment(data.department || "");
+      setBio(data.bio || "");
+    }
+    setLoading(false);
+  };
+
+  const pickImage = async () => {
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.7,
+    });
+    if (res.canceled || !res.assets || res.assets.length === 0) return;
+    setAvatarUri(res.assets[0].uri);
+  };
+
+  async function uriToFile(
+    uri: string,
+    fileName: string
+  ): Promise<File | Blob> {
+    if (Platform.OS === "web") {
+      // @ts-ignore: web picker returns File[]
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      return new File([blob], fileName, { type: blob.type });
+    } else {
+      const response = await fetch(uri);
+      return await response.blob();
     }
   }
 
-  async function pickImage() {
-    try {
-      const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        quality: 0.8,
-      });
-      if (res.canceled) return;
-      setAvatarUri(res.assets[0].uri);
-    } catch (e: any) {
-      console.error("pick image error", e);
-    }
-  }
-
-  async function uploadAvatarIfNeeded(uri: string | null) {
-    if (!uri) return initialAvatarUrl;
-    // if uri is already a URL (starts with http) return it
+  const uploadAvatarIfNeeded = async (uri: string | null) => {
+    if (!uri) return profile?.avatar_url ?? null;
     if (uri.startsWith("http")) return uri;
 
     const { data: userResp } = await supabase.auth.getUser();
-    const user = userResp?.user;
-    if (!user) throw new Error("Not authenticated");
+    const uid = userResp?.user?.id;
+    if (!uid) throw new Error("Not signed in");
 
     const ext = uri.split(".").pop()?.split("?")[0] || "jpg";
-    const path = `avatars/${user.id}/${Date.now()}.${ext}`;
+    const path = `avatars/${uid}/${Date.now()}.${ext}`;
 
-    const res = await fetch(uri);
-    const blob = await res.blob();
+    const fileOrBlob = await uriToFile(uri, `avatar.${ext}`);
 
     const { error } = await supabase.storage
       .from("avatars")
-      .upload(path, blob, {
+      .upload(path, fileOrBlob, {
         upsert: true,
-        contentType: blob.type || "image/jpeg",
+        contentType: (fileOrBlob as any).type || "image/jpeg",
       });
-
     if (error) throw error;
 
-    const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
-    return pub.publicUrl;
-  }
+    const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+    return data.publicUrl;
+  };
 
-  async function handleSave() {
+  const handleSave = async () => {
     setLoading(true);
     try {
+      const { data: userResp } = await supabase.auth.getUser();
+      const uid = userResp?.user?.id;
+      if (!uid) throw new Error("Not signed in");
+
       // username uniqueness check
       if (!username.trim()) {
         Alert.alert("Validation", "Username cannot be empty");
@@ -123,129 +127,160 @@ export default function EditProfileScreen({ navigation }: any) {
         return;
       }
 
-      const { data: userResp } = await supabase.auth.getUser();
-      const user = userResp?.user;
-      if (!user) {
-        Alert.alert("Not signed in");
-        setLoading(false);
-        return;
-      }
-
-      // check username taken by another user
       const { data: existing } = await supabase
         .from("profiles")
         .select("id")
-        .eq("username", username)
+        .eq("username", username.trim())
         .limit(1);
-
-      if (existing && existing.length > 0 && existing[0].id !== user.id) {
-        Alert.alert("Username taken", "Please pick another username");
+      if (existing && existing.length > 0 && existing[0].id !== uid) {
+        Alert.alert("Username taken", "Choose another username.");
         setLoading(false);
         return;
       }
 
-      const avatarUrl = await uploadAvatarIfNeeded(avatarUri);
+      const avatar_url = await uploadAvatarIfNeeded(avatarUri);
+      const ageNum = age ? parseInt(age, 10) : null;
 
       const { error } = await supabase
         .from("profiles")
         .update({
           username: username.trim(),
-          full_name: fullName.trim(),
-          bio: bio.trim(),
-          avatar_url: avatarUrl || null,
+          full_name: fullName.trim() || null,
+          avatar_url: avatar_url || null,
+          searching_roommate: !!searchingRoommate,
+          location: location || null,
+          age: ageNum,
+          religion: religion || null,
+          department: department || null,
+          bio: bio || null,
         })
-        .eq("id", user.id);
+        .eq("id", uid);
 
-      if (error) {
-        console.error("profile update error", error);
-        Alert.alert("Error", error.message);
-        setLoading(false);
-        return;
-      }
-
+      if (error) throw error;
       Alert.alert("Saved", "Profile updated");
       navigation.goBack();
     } catch (e: any) {
       console.error("save profile error", e);
-      Alert.alert("Error", e.message || "Could not update profile");
+      Alert.alert("Error", e.message || "Could not save");
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   if (loading) return <ActivityIndicator style={{ flex: 1 }} />;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <TouchableOpacity onPress={pickImage}>
+    <ScrollView contentContainerStyle={{ padding: 16 }}>
+      <TouchableOpacity
+        onPress={pickImage}
+        style={{ alignSelf: "center", marginBottom: 12 }}
+      >
         {avatarUri ? (
-          <Image source={{ uri: avatarUri }} style={styles.avatar} />
-        ) : initialAvatarUrl ? (
-          <Image source={{ uri: initialAvatarUrl }} style={styles.avatar} />
+          <Image
+            source={{ uri: avatarUri }}
+            style={{ width: 100, height: 100, borderRadius: 50 }}
+          />
         ) : (
-          <View style={[styles.avatar, styles.avatarPlaceholder]}>
+          <View
+            style={{
+              width: 100,
+              height: 100,
+              borderRadius: 50,
+              backgroundColor: "#f3f4f6",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
             <Text>Add</Text>
           </View>
         )}
       </TouchableOpacity>
 
-      <Text style={styles.label}>Username</Text>
+      <Text style={{ fontWeight: "700" }}>Username</Text>
       <TextInput
-        style={styles.input}
+        style={s.input}
         value={username}
         onChangeText={setUsername}
+        autoCapitalize="none"
       />
 
-      <Text style={styles.label}>Full name</Text>
+      <Text style={{ fontWeight: "700", marginTop: 8 }}>Full name</Text>
+      <TextInput style={s.input} value={fullName} onChangeText={setFullName} />
+
+      <Text style={{ fontWeight: "700", marginTop: 8 }}>
+        Searching for roommate
+      </Text>
+      <TouchableOpacity
+        onPress={() => setSearchingRoommate(!searchingRoommate)}
+        style={[
+          s.toggleBtn,
+          searchingRoommate && s.toggleActive,
+          { marginTop: 8 },
+        ]}
+      >
+        <Text style={searchingRoommate ? s.toggleTextActive : s.toggleText}>
+          {searchingRoommate ? "Yes" : "No"}
+        </Text>
+      </TouchableOpacity>
+
+      <Text style={{ fontWeight: "700", marginTop: 8 }}>Location</Text>
+      <TextInput style={s.input} value={location} onChangeText={setLocation} />
+
+      <Text style={{ fontWeight: "700", marginTop: 8 }}>Age</Text>
       <TextInput
-        style={styles.input}
-        value={fullName}
-        onChangeText={setFullName}
+        style={s.input}
+        value={age}
+        onChangeText={setAge}
+        keyboardType="numeric"
       />
 
-      <Text style={styles.label}>Bio</Text>
+      <Text style={{ fontWeight: "700", marginTop: 8 }}>Religion</Text>
+      <TextInput style={s.input} value={religion} onChangeText={setReligion} />
+
+      <Text style={{ fontWeight: "700", marginTop: 8 }}>Department</Text>
       <TextInput
-        style={[styles.input, { height: 100 }]}
+        style={s.input}
+        value={department}
+        onChangeText={setDepartment}
+      />
+
+      <Text style={{ fontWeight: "700", marginTop: 8 }}>Bio</Text>
+      <TextInput
+        style={[s.input, { minHeight: 80 }]}
         value={bio}
         onChangeText={setBio}
         multiline
       />
 
-      <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-        <Text style={styles.saveText}>Save</Text>
+      <TouchableOpacity style={[s.btn, { marginTop: 16 }]} onPress={handleSave}>
+        <Text style={s.btnText}>Save</Text>
       </TouchableOpacity>
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { padding: 16, backgroundColor: "#fff" },
-  avatar: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    alignSelf: "center",
-    marginBottom: 16,
-  },
-  avatarPlaceholder: {
-    backgroundColor: "#f3f4f6",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  label: { fontWeight: "700", marginTop: 8 },
+const s = StyleSheet.create({
   input: {
     borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 8,
+    borderColor: "#e5e7eb",
     padding: 10,
+    borderRadius: 8,
     marginTop: 6,
   },
-  saveBtn: {
+  toggleBtn: {
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  toggleActive: { backgroundColor: "#2563eb", borderColor: "#2563eb" },
+  toggleText: { color: "#374151", fontWeight: "700" },
+  toggleTextActive: { color: "#fff", fontWeight: "700" },
+  btn: {
     backgroundColor: "#2563eb",
     padding: 14,
     borderRadius: 10,
-    marginTop: 16,
     alignItems: "center",
   },
-  saveText: { color: "#fff", fontWeight: "700" },
+  btnText: { color: "#fff", fontWeight: "700" },
 });

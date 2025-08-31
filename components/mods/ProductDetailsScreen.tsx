@@ -146,8 +146,6 @@ export default function ProductDetailsScreen() {
         chatId = created.id;
       }
 
-      // Navigate to ChatScreen
-      // Ensure your stack has: <Stack.Screen name="ChatScreen" component={ChatScreen} />
       if (chatId) {
         navigation.navigate("ChatScreen", { chatId });
       } else {
@@ -161,6 +159,7 @@ export default function ProductDetailsScreen() {
 
   const deleteListing = async () => {
     if (!listing || !isOwner) return;
+
     Alert.alert(
       "Delete Listing",
       "Are you sure you want to delete this post?",
@@ -171,29 +170,73 @@ export default function ProductDetailsScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              // Try removing image file if we can derive its storage path
+              // 1) Attempt to remove storage object if we can derive a path
               if (listing.thumbnail_url) {
-                // expected public URL form:
-                // https://<project>.supabase.co/storage/v1/object/public/listing-images/<path>
-                const prefix = "/object/public/listing-images/";
-                const idx = listing.thumbnail_url.indexOf(prefix);
-                if (idx !== -1) {
-                  const path = listing.thumbnail_url.substring(
-                    idx + prefix.length
+                try {
+                  const url = listing.thumbnail_url;
+                  const re = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
+                  const m = url.match(re);
+                  if (m && m.length >= 3) {
+                    const bucket = m[1];
+                    const path = decodeURIComponent(m[2]);
+                    const { error: rmErr } = await supabase.storage
+                      .from(bucket)
+                      .remove([path]);
+                    if (rmErr) console.warn("Image remove error:", rmErr);
+                  } else {
+                    // fallback parse
+                    const idx = url.indexOf("/object/public/");
+                    if (idx !== -1) {
+                      const tail = url.substring(
+                        idx + "/object/public/".length
+                      );
+                      const parts = tail.split("/");
+                      const bucket = parts.shift()!;
+                      const path = decodeURIComponent(parts.join("/"));
+                      const { error: rmErr2 } = await supabase.storage
+                        .from(bucket)
+                        .remove([path]);
+                      if (rmErr2)
+                        console.warn("Image remove fallback error:", rmErr2);
+                    } else {
+                      console.log(
+                        "Couldn't parse storage path from thumbnail URL."
+                      );
+                    }
+                  }
+                } catch (e: any) {
+                  console.warn(
+                    "Error removing image from storage (non-fatal):",
+                    e
                   );
-                  const { error: rmErr } = await supabase.storage
-                    .from("listing-images")
-                    .remove([path]);
-                  if (rmErr) console.warn("Image remove error:", rmErr.message);
                 }
               }
 
+              // 2) Delete the DB row
               const { error: delErr } = await supabase
                 .from("listings")
                 .delete()
                 .eq("id", listing.id);
 
-              if (delErr) throw delErr;
+              if (delErr) {
+                console.error("Listing delete error:", delErr);
+                // give user a helpful message if RLS prevents deletion
+                if (
+                  delErr.message &&
+                  delErr.message.includes("row-level security")
+                ) {
+                  Alert.alert(
+                    "Permission denied",
+                    "Could not delete listing due to row-level security (RLS). Ensure your Supabase policies allow the authenticated user to delete their own listings."
+                  );
+                } else {
+                  Alert.alert(
+                    "Error",
+                    delErr.message || "Could not delete listing."
+                  );
+                }
+                return;
+              }
 
               Alert.alert("Deleted", "Your listing was removed.");
               navigation.goBack();
@@ -272,7 +315,6 @@ export default function ProductDetailsScreen() {
           <TouchableOpacity
             style={[styles.secondaryBtn, { marginRight: 8 }]}
             onPress={() =>
-              // Make sure you have an EditListing screen registered if you use this
               navigation.navigate("EditListing", { listingId: listing.id })
             }
           >

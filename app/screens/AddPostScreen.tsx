@@ -1,3 +1,4 @@
+// screens/AddPostScreen.tsx
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -8,8 +9,11 @@ import {
   Alert,
   Image,
   ScrollView,
+  Platform,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
+import { decode as base64Decode } from "base64-arraybuffer";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import uuid from "react-native-uuid";
@@ -17,7 +21,7 @@ import uuid from "react-native-uuid";
 interface Category {
   id: string;
   name: string;
-  slug: string;
+  slug?: string;
 }
 
 export default function AddPostScreen() {
@@ -36,26 +40,145 @@ export default function AddPostScreen() {
   }, []);
 
   const loadCategories = async () => {
-    const { data, error } = await supabase
-      .from("categories")
-      .select("*")
-      .order("name");
-    if (!error && data) {
-      setCategories(data);
-      if (data.length) setCategoryId(data[0].id);
+    try {
+      const { data, error } = await supabase
+        .from("categories")
+        .select("*")
+        .order("name");
+      if (error) {
+        console.warn("loadCategories error:", error);
+        return;
+      }
+      if (data) {
+        setCategories(data);
+        if (data.length && !categoryId) setCategoryId(data[0].id);
+      }
+    } catch (e) {
+      console.warn("loadCategories unexpected error", e);
     }
   };
 
   const pickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
+    try {
+      const permission =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (permission.status !== "granted") {
+        Alert.alert(
+          "Permission required",
+          "We need permission to access your photos."
+        );
+        return;
+      }
 
-    if (!result.canceled) {
-      setImage(result.assets[0].uri);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        // works on web + native
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setImage(result.assets[0].uri);
+      }
+    } catch (e: any) {
+      console.warn("pickImage error", e);
+      Alert.alert("Image error", "Could not open image picker.");
+    }
+  };
+
+  const getFileExt = (uri: string) => {
+    // handles file.jpg?params and data URIs fallback
+    const m = uri.match(/\.([a-zA-Z0-9]+)(\?|$)/);
+    if (m) return m[1].toLowerCase();
+    if (uri.startsWith("data:")) {
+      const t = uri.match(/data:(image\/[a-zA-Z]+);base64,/);
+      if (t) return t[1].split("/")[1];
+    }
+    return "jpg";
+  };
+
+  const makeFilename = (ext: string) => {
+    // uuid.v4 may be a function or value depending on package; fallback if needed
+    let id: string;
+    try {
+      // @ts-ignore
+      id = (typeof uuid.v4 === "function" ? uuid.v4() : uuid.v4) as string;
+    } catch {
+      id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    }
+    return `${id}.${ext}`;
+  };
+
+  // unified upload that picks method depending on platform
+  const uploadImageToStorage = async (uri: string, uid: string) => {
+    const bucket = "listing-images";
+    const ext = getFileExt(uri).replace("jpeg", "jpg");
+    const filename = makeFilename(ext);
+    const path = `${uid}/${filename}`;
+    const mime = ext === "png" ? "image/png" : "image/jpeg";
+
+    // WEB flow: fetch->blob then upload blob
+    if (Platform.OS === "web") {
+      try {
+        const resp = await fetch(uri);
+        const blob = await resp.blob();
+
+        const { error: uploadError } = await supabase.storage
+          .from(bucket)
+          .upload(path, blob, {
+            contentType: mime,
+            upsert: true,
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+        return data.publicUrl;
+      } catch (err: any) {
+        console.warn("upload (web) failed:", err);
+        throw new Error(err?.message || "Web upload failed.");
+      }
+    }
+
+    // NATIVE flow: read base64 -> ArrayBuffer -> upload
+    try {
+      // expo-file-system read as base64 (works consistently on Android/iOS)
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const arrayBuffer = base64Decode(base64);
+
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(path, arrayBuffer as any, {
+          contentType: mime,
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      return data.publicUrl;
+    } catch (err: any) {
+      console.warn("upload (native) failed:", err);
+      // Try a fallback: attempt fetch->blob (some RN runtimes support it)
+      try {
+        const resp = await fetch(uri);
+        const blob = await resp.blob();
+        const { error: uploadError2 } = await supabase.storage
+          .from(bucket)
+          .upload(path, blob, {
+            contentType: mime,
+            upsert: true,
+          });
+        if (uploadError2) throw uploadError2;
+        const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+        return data.publicUrl;
+      } catch (fallbackErr: any) {
+        console.warn("upload fallback failed:", fallbackErr);
+        throw new Error(fallbackErr?.message || "Native upload failed.");
+      }
     }
   };
 
@@ -71,44 +194,21 @@ export default function AddPostScreen() {
     setLoading(true);
 
     try {
-      let uploadedUrl = null;
+      let uploadedUrl: string | null = null;
 
       if (image) {
-        const fileExt = image.split(".").pop()?.toLowerCase() || "jpg,png";
-        const fileName = `${uuid.v4()}.${fileExt}`;
-        const filePath = `${user.id}/${fileName}`;
-
-        // Upload
-        const img = await fetch(image);
-        const blob = await img.blob();
-
-        const { error: uploadError } = await supabase.storage
-          .from("listing-images")
-          .upload(filePath, blob, {
-            contentType: "image/jpeg,image/png",
-            upsert: true,
-          });
-
-        if (uploadError) throw uploadError;
-
-        // Get public URL
-        const { data: urlData } = supabase.storage
-          .from("listing-images")
-          .getPublicUrl(filePath);
-
-        uploadedUrl = urlData.publicUrl;
+        uploadedUrl = await uploadImageToStorage(image, user.id);
       }
 
-      // Insert into DB
       const { error } = await supabase.from("listings").insert([
         {
           title,
           price: Number(price),
-          location,
+          location: location || null,
           category_id: categoryId,
           user_id: user.id,
           thumbnail_url: uploadedUrl,
-          description: description,
+          description: description || null,
         },
       ]);
 
@@ -118,12 +218,14 @@ export default function AddPostScreen() {
       setTitle("");
       setPrice("");
       setLocation("");
-      setCategoryId("");
-      setImage(null);
       setDescription("");
+      setImage(null);
+      if (categories.length) setCategoryId(categories[0].id);
     } catch (err: any) {
       console.error("Submit error:", err);
-      Alert.alert("Error", err.message);
+      let message = err?.message ?? "Unknown error";
+      if (message.includes("Network request failed"))
+      Alert.alert("Error", message);
     } finally {
       setLoading(false);
     }
@@ -194,12 +296,22 @@ export default function AddPostScreen() {
             }}
           />
         ) : null}
-        <TouchableOpacity style={styles.secondary} onPress={pickImage}>
+        <TouchableOpacity
+          style={styles.secondary}
+          onPress={pickImage}
+          disabled={loading}
+        >
           <Text style={styles.secondaryText}>Pick Image</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.btn} onPress={submit}>
-          <Text style={styles.btnText}>Publish</Text>
+        <TouchableOpacity
+          style={styles.btn}
+          onPress={submit}
+          disabled={loading}
+        >
+          <Text style={styles.btnText}>
+            {loading ? "Publishing..." : "Publish"}
+          </Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
@@ -246,5 +358,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  secondaryText: { color: "#2563eb", fontWeight: "700" },
+  secondaryText: {
+    color: "#2563eb",
+    fontWeight: "700",
+  },
 });

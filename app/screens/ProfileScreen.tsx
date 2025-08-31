@@ -12,6 +12,7 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "@/lib/supabase";
 import { useNavigation } from "@react-navigation/native";
+import { Platform } from "react-native";
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
@@ -96,6 +97,21 @@ export default function ProfileScreen() {
     }
   }
 
+  async function uriToFile(
+    uri: string,
+    fileName: string
+  ): Promise<File | Blob> {
+    if (Platform.OS === "web") {
+      // @ts-ignore: web picker returns File[]
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      return new File([blob], fileName, { type: blob.type });
+    } else {
+      const response = await fetch(uri);
+      return await response.blob();
+    }
+  }
+
   async function uploadAvatar(uri: string) {
     setLoading(true);
     try {
@@ -106,15 +122,13 @@ export default function ProfileScreen() {
       const ext = uri.split(".").pop()?.split("?")[0] ?? "jpg";
       const filePath = `avatars/${user.id}/${Date.now()}.${ext}`;
 
-      // convert to blob and upload
-      const response = await fetch(uri);
-      const blob = await response.blob();
+      const fileOrBlob = await uriToFile(uri, `avatar.${ext}`);
 
       const { error: uploadErr } = await supabase.storage
         .from("avatars")
-        .upload(filePath, blob, {
+        .upload(filePath, fileOrBlob, {
           upsert: true,
-          contentType: blob.type || "image/jpeg",
+          contentType: (fileOrBlob as any).type || "image/jpeg",
         });
 
       if (uploadErr) throw uploadErr;
@@ -124,15 +138,11 @@ export default function ProfileScreen() {
         .getPublicUrl(filePath);
       const publicUrl = publicData.publicUrl;
 
-      // update profile row with avatar_url
-      const { error: updateErr } = await supabase
+      await supabase
         .from("profiles")
         .update({ avatar_url: publicUrl })
         .eq("id", user.id);
 
-      if (updateErr) throw updateErr;
-
-      // refresh local state
       setProfile((p: any) => ({ ...p, avatar_url: publicUrl }));
     } catch (e: any) {
       console.error("uploadAvatar error", e);
