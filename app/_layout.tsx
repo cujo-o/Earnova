@@ -1,4 +1,3 @@
-// layout.tsx  (root app entry)
 import React, { useEffect, useState } from "react";
 import { View, ActivityIndicator } from "react-native";
 import {
@@ -22,13 +21,38 @@ import EditProfileScreen from "@/components/mods/EditProfileScreen";
 import ChatListScreen from "@/components/mods/ChatListScreen";
 import RoommateSwipeScreen from "./screens/RoommateSwipeScreen";
 import CreateProfileModal from "@/components/mods/CreateProfileModal";
+import Ionicons from "@expo/vector-icons/Ionicons";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function Tabs() {
   return (
-    <Tab.Navigator screenOptions={{ headerShown: false }}>
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarIcon: ({ color, size }) => {
+          let iconName: string = "";
+
+          if (route.name === "Home") iconName = "home-outline";
+          else if (route.name === "Explore") iconName = "search-outline";
+          else if (route.name === "AddPost") iconName = "add-circle-outline";
+          else if (route.name === "RoommateSwipe") iconName = "people-outline";
+          else if (route.name === "chats") iconName = "chatbubble-outline";
+          else if (route.name === "Profile") iconName = "person-outline";
+
+          return (
+            <Ionicons
+              name={iconName as keyof typeof Ionicons.glyphMap}
+              size={size}
+              color={color}
+            />
+          );
+        },
+        tabBarActiveTintColor: "#007AFF",
+        tabBarInactiveTintColor: "gray",
+      })}
+    >
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Explore" component={ListingsScreen} />
       <Tab.Screen name="AddPost" component={AddPostScreen} />

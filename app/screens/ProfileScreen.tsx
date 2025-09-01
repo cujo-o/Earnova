@@ -8,225 +8,259 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  FlatList,
 } from "react-native";
-import * as ImagePicker from "expo-image-picker";
 import { supabase } from "@/lib/supabase";
 import { useNavigation } from "@react-navigation/native";
-import { Platform } from "react-native";
+import { useAuth } from "@/lib/auth";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
+  const [savedProfiles, setSavedProfiles] = useState<any[]>([]);
+  const [myListings, setMyListings] = useState<any[]>([]);
 
   useEffect(() => {
-    loadProfile();
-  }, []);
+    loadAll();
+    // re-run when navigation returns to screen?
+  }, [user]);
 
-  // ensures a profile row exists; fetches profile and sets state
-  async function loadProfile() {
+  const loadAll = async () => {
     setLoading(true);
     try {
+      await loadProfile();
+      await loadSavedProfiles();
+      await loadMyListings();
+    } catch (e) {
+      console.warn("loadAll err", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  async function loadProfile() {
+    try {
       const { data: userResp } = await supabase.auth.getUser();
-      const user = userResp?.user;
-      if (!user) {
+      const u = userResp?.user;
+      if (!u) {
         setProfile(null);
-        setLoading(false);
         return;
       }
 
-      // try fetch profile row
       const { data, error } = await supabase
         .from("profiles")
         .select("id, username, full_name, bio, avatar_url")
-        .eq("id", user.id)
-        .single();
+        .eq("id", u.id)
+        .maybeSingle();
 
-      if (error && error.code !== "PGRST116") {
-        // PGRST116 sometimes returned when no rows, ignore that case
-        console.warn("profiles select error:", error.message);
-      }
-
-      if (!data) {
-        // no profile row — create one (safe upsert)
-        const defaultUsername = user.email ? user.email.split("@")[0] : user.id;
-        const { error: upsertErr } = await supabase.from("profiles").upsert(
-          {
-            id: user.id,
-            username: defaultUsername,
-            full_name: null,
-            bio: null,
-            avatar_url: null,
-          },
-          { onConflict: "id" }
-        );
-        if (upsertErr) console.warn("upsert profile error:", upsertErr.message);
-
-        // fetch again
-        const { data: newProfile } = await supabase
-          .from("profiles")
-          .select("id, username, full_name, bio, avatar_url")
-          .eq("id", user.id)
-          .single();
-        setProfile(newProfile);
+      if (error) {
+        console.warn("profiles select error:", error);
       } else {
         setProfile(data);
       }
-    } catch (e: any) {
-      console.error("loadProfile error", e);
-      Alert.alert("Error", "Could not load profile.");
-    } finally {
-      setLoading(false);
+    } catch (e) {
+      console.error("loadProfile err", e);
     }
   }
 
-  // pick & upload avatar then update profile row
-  async function pickAvatar() {
+  async function loadSavedProfiles() {
     try {
-      const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        quality: 0.8,
-      });
-      if (res.canceled) return;
-      const uri = res.assets[0].uri;
-      await uploadAvatar(uri);
-    } catch (e: any) {
-      console.error("pickAvatar error", e);
-      Alert.alert("Error", "Could not pick avatar.");
+      if (!user) return;
+      const { data } = await supabase
+        .from("saved_profiles")
+        .select("saved_id, created_at, profiles ( id, username, full_name, avatar_url, bio )")
+        .eq("saver_id", user.id)
+        .order("created_at", { ascending: false });
+
+      // supabase returns nested `profiles` object
+      const mapped = (data || []).map((row: any) => ({
+        saved_id: row.saved_id,
+        meta: row.profiles,
+      }));
+      setSavedProfiles(mapped);
+    } catch (e) {
+      console.error("loadSavedProfiles err", e);
     }
   }
 
-  async function uriToFile(
-    uri: string,
-    fileName: string
-  ): Promise<File | Blob> {
-    if (Platform.OS === "web") {
-      // @ts-ignore: web picker returns File[]
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      return new File([blob], fileName, { type: blob.type });
-    } else {
-      const response = await fetch(uri);
-      return await response.blob();
-    }
-  }
-
-  async function uploadAvatar(uri: string) {
-    setLoading(true);
+  async function loadMyListings() {
     try {
-      const { data: userResp } = await supabase.auth.getUser();
-      const user = userResp?.user;
-      if (!user) throw new Error("Not authenticated");
+      if (!user) return;
+      const { data } = await supabase
+        .from("listings")
+        .select("id, title, price, thumbnail_url")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
 
-      const ext = uri.split(".").pop()?.split("?")[0] ?? "jpg";
-      const filePath = `avatars/${user.id}/${Date.now()}.${ext}`;
-
-      const fileOrBlob = await uriToFile(uri, `avatar.${ext}`);
-
-      const { error: uploadErr } = await supabase.storage
-        .from("avatars")
-        .upload(filePath, fileOrBlob, {
-          upsert: true,
-          contentType: (fileOrBlob as any).type || "image/jpeg",
-        });
-
-      if (uploadErr) throw uploadErr;
-
-      const { data: publicData } = supabase.storage
-        .from("avatars")
-        .getPublicUrl(filePath);
-      const publicUrl = publicData.publicUrl;
-
-      await supabase
-        .from("profiles")
-        .update({ avatar_url: publicUrl })
-        .eq("id", user.id);
-
-      setProfile((p: any) => ({ ...p, avatar_url: publicUrl }));
-    } catch (e: any) {
-      console.error("uploadAvatar error", e);
-      Alert.alert("Upload error", e.message || "Could not upload avatar.");
-    } finally {
-      setLoading(false);
+      setMyListings(data || []);
+    } catch (e) {
+      console.error("loadMyListings err", e);
     }
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    // replace navigation to auth/login route in your app
-    // navigation.replace("Auth");
-  }
+  const startChatWith = async (otherId: string) => {
+    if (!user) {
+      Alert.alert("Sign in required");
+      return;
+    }
+
+    try {
+      // find existing chat in either orientation
+      const { data: chatFound } = await supabase
+        .from("chats")
+        .select("id")
+        .or(`(user_a.eq.${user.id},user_b.eq.${otherId}),(user_a.eq.${otherId},user_b.eq.${user.id})`)
+        .limit(1);
+
+      let chatId = chatFound && chatFound.length > 0 ? chatFound[0].id : null;
+
+      if (!chatId) {
+        const { data: chatCreated, error: chatErr } = await supabase
+          .from("chats")
+          .insert([{ user_a: user.id, user_b: otherId }])
+          .select("id")
+          .maybeSingle();
+        if (chatErr) {
+          console.warn("chat create err", chatErr);
+        } else {
+          chatId = chatCreated?.id;
+        }
+      }
+
+      if (chatId) {
+        (navigation as any).navigate("ChatScreen", { chatId });
+      } else {
+        Alert.alert("Error", "Could not open chat");
+      }
+    } catch (e: any) {
+      console.error("startChatWith err", e);
+      Alert.alert("Error", e.message || "Could not start chat");
+    }
+  };
+
+  const removeSaved = async (savedId: string) => {
+    try {
+      const { error } = await supabase
+        .from("saved_profiles")
+        .delete()
+        .eq("saver_id", user?.id)
+        .eq("saved_id", savedId);
+      if (error) throw error;
+      // refresh
+      await loadSavedProfiles();
+    } catch (e: any) {
+      console.error("removeSaved err", e);
+      Alert.alert("Error", "Could not remove saved profile");
+    }
+  };
 
   if (loading) return <ActivityIndicator style={{ flex: 1 }} />;
 
-  if (!profile) {
-    return (
-      <View style={styles.center}>
-        <Text>No profile found</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.container}>
-      <TouchableOpacity onPress={pickAvatar}>
-        {profile.avatar_url ? (
-          <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
-        ) : (
-          <View style={[styles.avatar, styles.avatarPlaceholder]}>
-            <Text style={{ color: "#111" }}>Add</Text>
+      <View style={styles.topRow}>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <TouchableOpacity onPress={() => (navigation as any).navigate("EditProfile")}>
+            {profile?.avatar_url ? (
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, styles.avatarPlaceholder]}>
+                <Text style={{ color: "#111" }}>Add</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <View style={{ marginLeft: 12 }}>
+            <Text style={styles.name}>{profile?.full_name || profile?.username}</Text>
+            <Text style={styles.username}>@{profile?.username}</Text>
           </View>
+        </View>
+
+        <TouchableOpacity style={styles.logout} onPress={async () => { await supabase.auth.signOut(); }}>
+          <Text style={{ color: "#fff", fontWeight: "700" }}>Logout</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={{ padding: 16 }}>
+        <Text style={styles.sectionTitle}>Saved Students</Text>
+        {savedProfiles.length === 0 ? (
+          <Text style={{ color: "#6b7280" }}>You have no saved profiles.</Text>
+        ) : (
+          <FlatList
+            data={savedProfiles}
+            keyExtractor={(i) => i.saved_id}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            renderItem={({ item }) => {
+              const p = item.meta;
+              return (
+                <View style={styles.savedCard}>
+                  <Image source={{ uri: p.avatar_url ?? "https://placehold.co/80x80" }} style={styles.savedAvatar} />
+                  <Text style={{ fontWeight: "700" }}>{p.full_name || p.username}</Text>
+                  <View style={{ flexDirection: "row", marginTop: 6 }}>
+                    <TouchableOpacity onPress={() => startChatWith(p.id)} style={styles.smallBtn}>
+                      <Ionicons name="chatbubble-outline" size={16} color="#2563eb" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => removeSaved(p.id)} style={[styles.smallBtn, { marginLeft: 8 }]}>
+                      <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            }}
+            style={{ marginTop: 8 }}
+          />
         )}
-      </TouchableOpacity>
+      </View>
 
-      <Text style={styles.name}>{profile.full_name ?? profile.username}</Text>
-      <Text style={styles.username}>@{profile.username}</Text>
-      {!!profile.bio && <Text style={styles.bio}>{profile.bio}</Text>}
-
-      <View style={{ height: 20 }} />
-
-      <TouchableOpacity
-        style={styles.button}
-        onPress={() => (navigation as any).navigate("EditProfile")}
-      >
-        <Text style={styles.buttonText}>Edit Profile</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={[styles.button, styles.logout]}
-        onPress={handleLogout}
-      >
-        <Text style={[styles.buttonText, { color: "#fff" }]}>Logout</Text>
-      </TouchableOpacity>
+      <View style={{ paddingHorizontal: 16 }}>
+        <Text style={styles.sectionTitle}>My Listings</Text>
+        {myListings.length === 0 ? (
+          <Text style={{ color: "#6b7280" }}>You haven't added listings yet.</Text>
+        ) : (
+          <FlatList
+            data={myListings}
+            keyExtractor={(i) => i.id}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            renderItem={({ item }) => (
+              <TouchableOpacity style={styles.listingCard} onPress={() => (navigation as any).navigate("ProductDetails", { productId: item.id })}>
+                {item.thumbnail_url ? (
+                  <Image source={{ uri: item.thumbnail_url }} style={styles.listingImage} />
+                ) : (
+                  <View style={[styles.listingImage, { justifyContent: "center", alignItems: "center" }]}><Text>No image</Text></View>
+                )}
+                <Text style={{ fontWeight: "700", marginTop: 6 }}>{item.title}</Text>
+                <Text style={{ color: "#2563eb" }}>₦{Number(item.price).toLocaleString()}</Text>
+              </TouchableOpacity>
+            )}
+            style={{ marginTop: 8, paddingBottom: 24 }}
+          />
+        )}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  container: {
-    flex: 1,
+  container: { flex: 1, backgroundColor: "#fff" },
+  topRow: {
+    flexDirection: "row",
     alignItems: "center",
-    padding: 20,
-    backgroundColor: "#fff",
+    justifyContent: "space-between",
+    padding: 16,
   },
-  avatar: { width: 110, height: 110, borderRadius: 55, marginBottom: 12 },
-  avatarPlaceholder: {
-    backgroundColor: "#f3f4f6",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  name: { fontSize: 20, fontWeight: "700" },
-  username: { color: "#6b7280", marginBottom: 8 },
-  bio: { textAlign: "center", color: "#374151", marginBottom: 12 },
-  button: {
-    backgroundColor: "#2563eb",
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 10,
-    marginTop: 8,
-  },
-  logout: { backgroundColor: "#ef4444" },
-  buttonText: { color: "#fff", fontWeight: "700" },
+  avatar: { width: 80, height: 80, borderRadius: 40 },
+  avatarPlaceholder: { backgroundColor: "#f3f4f6", alignItems: "center", justifyContent: "center" },
+  name: { fontSize: 18, fontWeight: "800" },
+  username: { color: "#6b7280" },
+  logout: { backgroundColor: "#ef4444", padding: 10, borderRadius: 8 },
+  sectionTitle: { fontWeight: "800", fontSize: 16, marginBottom: 8 },
+  savedCard: { width: 120, padding: 10, marginRight: 12, backgroundColor: "#f8fafc", borderRadius: 10, alignItems: "center" },
+  savedAvatar: { width: 60, height: 60, borderRadius: 30, marginBottom: 6 },
+  smallBtn: { backgroundColor: "#fff", padding: 8, borderRadius: 8, borderWidth: 1, borderColor: "#e5e7eb" },
+  listingCard: { width: 160, marginRight: 12 },
+  listingImage: { width: 160, height: 100, borderRadius: 8, backgroundColor: "#f3f4f6" },
 });

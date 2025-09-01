@@ -188,7 +188,7 @@ export default function ChatListScreen({ navigation }: any) {
   const renderItem = ({ item }: { item: ChatRow }) => (
     <TouchableOpacity
       style={styles.row}
-      onPress={() => navigation.navigate("ChatScreen", { chatId: item.id })}
+      onPress={() => navigation.navigate("ChatScreen" , { chatId: item.id })}
     >
       <View style={styles.left}>
         <View style={styles.avatarPlaceholder} />
