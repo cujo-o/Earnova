@@ -18,7 +18,9 @@ export default function RoommateCard({ profile }: { profile: Profile }) {
     <View style={s.card}>
       <Image
         source={{
-          uri: profile.avatar_url ?? "https://placehold.co/800x600/png?text=No+Photo",
+          uri:
+            profile.avatar_url ??
+            "https://placehold.co/800x600/png?text=No+Photo",
         }}
         style={s.image}
       />
@@ -28,7 +30,8 @@ export default function RoommateCard({ profile }: { profile: Profile }) {
           {profile.age ? `, ${profile.age}` : ""}
         </Text>
         <Text style={s.meta}>
-          {profile.department ?? "Department"} • {profile.location ?? "Location"}
+          {profile.department ?? "Department"} •{" "}
+          {profile.location ?? "Location"}
         </Text>
         {profile.bio ? (
           <Text numberOfLines={4} style={s.bio}>
