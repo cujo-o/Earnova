@@ -50,7 +50,7 @@ export default function LatestItemsList({ navigation }: any) {
         </View>
       )}
       <Text style={styles.title}>{item.title}</Text>
-      <Text style={styles.price}>₦{item.price}</Text>
+      <Text style={styles.price}> ₦{Number(item.price).toLocaleString()}</Text>
     </TouchableOpacity>
   );
 

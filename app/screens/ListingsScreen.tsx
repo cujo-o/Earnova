@@ -59,7 +59,7 @@ export default function ListingScreen({ navigation }: any) {
       )}
       <View style={styles.cardContent}>
         <Text style={styles.title}>{item.title}</Text>
-        <Text style={styles.price}>₦{item.price}</Text>
+        <Text style={styles.price}> ₦{Number(item.price).toLocaleString()}</Text>
         <Text style={styles.meta}>
           {item.categories?.name ?? "Uncategorized"} •{" "}
           {item.location || "Unknown"}
