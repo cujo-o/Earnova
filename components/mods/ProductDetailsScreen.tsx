@@ -1,3 +1,4 @@
+// screens/ProductDetailsScreen.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -9,51 +10,22 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
-import {
-  RouteProp,
-  useNavigation,
-  useRoute,
-  NavigationProp,
-} from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 
-type RootStackParamList = {
-  ProductDetails: { productId: string };
-  ChatScreen: { chatId: string };
-  EditListing: { listingId: string };
-};
-
-type ProductDetailsRoute = RouteProp<RootStackParamList, "ProductDetails">;
-
-interface Listing {
-  id: string;
-  title: string;
-  price: number;
-  description: string | null;
-  location: string | null;
-  thumbnail_url: string | null;
-  user_id: string;
-  category_id: string | null;
-  created_at: string;
-}
-
-interface Profile {
-  id: string;
-  username: string | null;
-  full_name: string | null;
-  avatar_url: string | null;
-}
+type RouteParams = { productId: string };
 
 export default function ProductDetailsScreen() {
   const { user } = useAuth();
-  const route = useRoute<ProductDetailsRoute>();
-  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
-  const { productId } = route.params;
+  const route = useRoute();
+  const navigation = useNavigation<any>();
+  const { productId } = route.params as RouteParams;
 
   const [loading, setLoading] = useState(true);
-  const [listing, setListing] = useState<Listing | null>(null);
-  const [seller, setSeller] = useState<Profile | null>(null);
+  const [listing, setListing] = useState<any | null>(null);
+  const [seller, setSeller] = useState<any | null>(null);
+
   const isOwner = useMemo(
     () => !!(user && listing && user.id === listing.user_id),
     [user, listing]
@@ -63,42 +35,49 @@ export default function ProductDetailsScreen() {
     let mounted = true;
     (async () => {
       setLoading(true);
-      // 1) Get listing
-      const { data: l, error: le } = await supabase
-        .from("listings")
-        .select(
-          "id,title,price,description,location,thumbnail_url,user_id,category_id,created_at"
-        )
-        .eq("id", productId)
-        .single();
+      try {
+        // fetch listing
+        const { data: l, error: le } = await supabase
+          .from("listings")
+          .select(
+            "id, title, price, description, location, thumbnail_url, user_id, category_id, created_at"
+          )
+          .eq("id", productId)
+          .maybeSingle();
 
-      if (le) {
-        console.error(le);
-        if (mounted) {
-          Alert.alert("Error", "Could not load product.");
+        if (le) throw le;
+        if (!l) {
+          Alert.alert("Not found", "Listing not found.");
+          setListing(null);
+          setSeller(null);
           setLoading(false);
+          return;
         }
-        return;
-      }
 
-      // 2) Get seller profile
-      let prof: Profile | null = null;
-      if (l?.user_id) {
-        const { data: p, error: pe } = await supabase
-          .from("profiles")
-          .select("id,username,full_name,avatar_url")
-          .eq("id", l.user_id)
-          .single();
-        if (pe) console.warn("Profile fetch error:", pe.message);
-        prof = p ?? null;
-      }
+        // fetch seller profile
+        let prof = null;
+        if (l.user_id) {
+          const { data: p, error: pe } = await supabase
+            .from("profiles")
+            .select("id, username, full_name, avatar_url")
+            .eq("id", l.user_id)
+            .maybeSingle();
+          if (pe) console.warn("fetch seller profile error", pe);
+          prof = p ?? null;
+        }
 
-      if (mounted) {
-        setListing(l);
-        setSeller(prof);
-        setLoading(false);
+        if (mounted) {
+          setListing(l);
+          setSeller(prof);
+        }
+      } catch (e: any) {
+        console.error("load listing error", e);
+        Alert.alert("Error", e.message ?? "Could not load listing.");
+      } finally {
+        if (mounted) setLoading(false);
       }
     })();
+
     return () => {
       mounted = false;
     };
@@ -106,44 +85,43 @@ export default function ProductDetailsScreen() {
 
   const startChat = async () => {
     try {
-      if (!user || !listing) {
-        Alert.alert("Login required", "Please sign in to message the seller.");
+      if (!user) {
+        Alert.alert(
+          "Sign in required",
+          "Please sign in to message the seller."
+        );
         return;
       }
+      if (!listing) return;
       if (isOwner) return;
 
-      // Reuse chat if it already exists
+      // Always normalize pair so user_a < user_b (string compare) to prevent duplicates
+      const sellerId = listing.user_id;
+      const [userA, userB] =
+        user.id < sellerId ? [user.id, sellerId] : [sellerId, user.id];
+
+      // Try to find an existing chat for this pair (and listing)
       const { data: existing, error: findErr } = await supabase
         .from("chats")
         .select("id")
-        .eq("listing_id", listing.id)
-        .eq("buyer_id", user.id)
-        .eq("seller_id", listing.user_id)
+        .eq("user_a", userA)
+        .eq("user_b", userB)
+        .limit(1)
         .maybeSingle();
 
-      if (findErr) {
-        console.warn("Find chat error:", findErr.message);
-      }
+      if (findErr) console.warn("find chat err", findErr);
 
       let chatId: string | null = existing?.id ?? null;
 
       if (!chatId) {
         const { data: created, error: createErr } = await supabase
           .from("chats")
-          .insert([
-            {
-              listing_id: listing.id,
-              buyer_id: user.id,
-              seller_id: listing.user_id,
-            },
-          ])
+          .insert([{ user_a: userA, user_b: userB, listing_id: listing.id }])
           .select("id")
-          .single();
+          .maybeSingle();
 
-        if (createErr) {
-          throw createErr;
-        }
-        chatId = created.id;
+        if (createErr) throw createErr;
+        chatId = created?.id ?? null;
       }
 
       if (chatId) {
@@ -152,111 +130,72 @@ export default function ProductDetailsScreen() {
         Alert.alert("Error", "Could not start chat.");
       }
     } catch (e: any) {
-      console.error("Start chat error:", e);
+      console.error("startChat error", e);
       Alert.alert("Error", e.message ?? "Could not start chat.");
     }
   };
 
   const deleteListing = async () => {
     if (!listing || !isOwner) return;
-
-    Alert.alert(
-      "Delete Listing",
-      "Are you sure you want to delete this post?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              // 1) Attempt to remove storage object if we can derive a path
-              if (listing.thumbnail_url) {
-                try {
-                  const url = listing.thumbnail_url;
-                  const re = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
-                  const m = url.match(re);
-                  if (m && m.length >= 3) {
-                    const bucket = m[1];
-                    const path = decodeURIComponent(m[2]);
-                    const { error: rmErr } = await supabase.storage
-                      .from(bucket)
-                      .remove([path]);
-                    if (rmErr) console.warn("Image remove error:", rmErr);
-                  } else {
-                    // fallback parse
-                    const idx = url.indexOf("/object/public/");
-                    if (idx !== -1) {
-                      const tail = url.substring(
-                        idx + "/object/public/".length
-                      );
-                      const parts = tail.split("/");
-                      const bucket = parts.shift()!;
-                      const path = decodeURIComponent(parts.join("/"));
-                      const { error: rmErr2 } = await supabase.storage
-                        .from(bucket)
-                        .remove([path]);
-                      if (rmErr2)
-                        console.warn("Image remove fallback error:", rmErr2);
-                    } else {
-                      console.log(
-                        "Couldn't parse storage path from thumbnail URL."
-                      );
-                    }
-                  }
-                } catch (e: any) {
-                  console.warn(
-                    "Error removing image from storage (non-fatal):",
-                    e
-                  );
+    Alert.alert("Delete Listing", "Are you sure?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            // try to remove associated storage object (best-effort)
+            if (listing.thumbnail_url) {
+              try {
+                const url = listing.thumbnail_url as string;
+                const re = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
+                const m = url.match(re);
+                if (m && m.length >= 3) {
+                  const bucket = m[1];
+                  const path = decodeURIComponent(m[2]);
+                  const { error: rmErr } = await supabase.storage
+                    .from(bucket)
+                    .remove([path]);
+                  if (rmErr) console.warn("remove image err", rmErr);
                 }
+              } catch (e) {
+                console.warn("delete image fallback err", e);
               }
-
-              // 2) Delete the DB row
-              const { error: delErr } = await supabase
-                .from("listings")
-                .delete()
-                .eq("id", listing.id);
-
-              if (delErr) {
-                console.error("Listing delete error:", delErr);
-                // give user a helpful message if RLS prevents deletion
-                if (
-                  delErr.message &&
-                  delErr.message.includes("row-level security")
-                ) {
-                  Alert.alert(
-                    "Permission denied",
-                    "Could not delete listing due to row-level security (RLS). Ensure your Supabase policies allow the authenticated user to delete their own listings."
-                  );
-                } else {
-                  Alert.alert(
-                    "Error",
-                    delErr.message || "Could not delete listing."
-                  );
-                }
-                return;
-              }
-
-              Alert.alert("Deleted", "Your listing was removed.");
-              navigation.goBack();
-            } catch (e: any) {
-              console.error("Delete error:", e);
-              Alert.alert("Error", e.message ?? "Could not delete listing.");
             }
-          },
+
+            const { error: delErr } = await supabase
+              .from("listings")
+              .delete()
+              .eq("id", listing.id);
+
+            if (delErr) {
+              console.error("delete listing error", delErr);
+              if (
+                delErr.message &&
+                delErr.message.includes("row-level security")
+              ) {
+                Alert.alert(
+                  "Permission denied",
+                  "Cannot delete due to RLS. Ensure policies allow deleting own listings."
+                );
+              } else {
+                Alert.alert("Error", delErr.message || "Could not delete.");
+              }
+              return;
+            }
+
+            Alert.alert("Deleted", "Listing removed.");
+            navigation.goBack();
+          } catch (e: any) {
+            console.error("delete error", e);
+            Alert.alert("Error", e.message ?? "Could not delete listing.");
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
+  if (loading) return <ActivityIndicator style={{ flex: 1 }} />;
 
   if (!listing) {
     return (
@@ -286,11 +225,7 @@ export default function ProductDetailsScreen() {
 
       <View style={styles.sellerRow}>
         <Image
-          source={{
-            uri:
-              seller?.avatar_url ??
-              "https://placehold.co/80x80/png?text=Avatar",
-          }}
+          source={{ uri: seller?.avatar_url ?? "https://placehold.co/80x80" }}
           style={styles.avatar}
         />
         <View style={{ flex: 1 }}>
