@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Alert,
+  Image,
 } from "react-native";
 import { supabase } from "@/lib/supabase";
 
@@ -47,19 +49,18 @@ export default function ChatListScreen({ navigation }: any) {
         if (!mounted) return;
         setCurrentUserId(user.id);
 
-        // 1) fetch chats where current user participates
         const { data: chatData, error: chatErr } = await supabase
           .from("chats")
           .select(
             `
-              id,
-              listing_id,
-              user_a,
-              user_b,
-              created_at,
-              profile_a:profiles!chats_user_a_fkey ( id, username, avatar_url ),
-              profile_b:profiles!chats_user_b_fkey ( id, username, avatar_url )
-            `
+            id,
+            listing_id,
+            user_a,
+            user_b,
+            created_at,
+            profile_a:profiles!chats_user_a_fkey ( id, username, avatar_url ),
+            profile_b:profiles!chats_user_b_fkey ( id, username, avatar_url )
+          `
           )
           .or(`user_a.eq.${user.id},user_b.eq.${user.id}`)
           .order("created_at", { ascending: false });
@@ -91,7 +92,7 @@ export default function ChatListScreen({ navigation }: any) {
         setChats(normalized);
         chatIdsRef.current = new Set(normalized.map((r) => r.id));
 
-        // 2) fetch latest message per chat (bulk)
+        // fetch latest messages for these chats
         if (normalized.length) {
           const chatIds = normalized.map((c) => c.id);
           const { data: msgs, error: msgErr } = await supabase
@@ -99,9 +100,9 @@ export default function ChatListScreen({ navigation }: any) {
             .select("id, chat_id, content, sender_id, created_at")
             .in("chat_id", chatIds)
             .order("created_at", { ascending: false });
+
           if (msgErr) console.warn("latest message fetch err", msgErr);
           else if (msgs) {
-            // msgs ordered desc; first per chat is latest
             const latestMap = new Map<string, any>();
             for (const m of msgs) {
               if (!latestMap.has(m.chat_id)) latestMap.set(m.chat_id, m);
@@ -115,7 +116,7 @@ export default function ChatListScreen({ navigation }: any) {
           }
         }
 
-        // 3) subscribe to new messages globally - RLS will restrict what this user sees
+        // subscribe to new messages globally (RLS will gate)
         const channel = supabase
           .channel("public:messages")
           .on(
@@ -124,8 +125,8 @@ export default function ChatListScreen({ navigation }: any) {
             async (payload) => {
               const newMsg = payload.new as any;
 
-              // If the chat is already in our list, update its lastMessage and move it to top
               if (chatIdsRef.current.has(newMsg.chat_id)) {
+                // update existing chat's last message and move it to top
                 setChats((prev) => {
                   const updated = prev.map((c) =>
                     c.id === newMsg.chat_id ? { ...c, lastMessage: newMsg } : c
@@ -140,7 +141,7 @@ export default function ChatListScreen({ navigation }: any) {
                 return;
               }
 
-              // Otherwise maybe a new chat was created for this user -> fetch that chat row and add it
+              // chat not in list -> fetch it and add
               try {
                 const { data: chatRow, error: fetchChatErr } = await supabase
                   .from("chats")
@@ -160,7 +161,6 @@ export default function ChatListScreen({ navigation }: any) {
                 }
                 if (!chatRow) return;
 
-                // pick the "other" participant for display
                 const otherRaw =
                   chatRow.user_a === currentUserId
                     ? chatRow.profile_b
@@ -215,13 +215,50 @@ export default function ChatListScreen({ navigation }: any) {
     };
   }, []);
 
+  // long-press to delete chat
+  const confirmDeleteChat = (id: string) => {
+    Alert.alert(
+      "Delete chat",
+      "Delete this chat and all its messages? This is permanent.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from("chats")
+                .delete()
+                .eq("id", id);
+              if (error) throw error;
+              setChats((prev) => prev.filter((c) => c.id !== id));
+              chatIdsRef.current.delete(id);
+            } catch (e: any) {
+              console.error("delete chat err", e);
+              Alert.alert("Error", e.message || "Could not delete chat (RLS?)");
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const renderItem = ({ item }: { item: ChatRow }) => (
     <TouchableOpacity
       style={styles.row}
       onPress={() => navigation.navigate("ChatScreen", { chatId: item.id })}
+      onLongPress={() => confirmDeleteChat(item.id)}
     >
       <View style={styles.left}>
-        <View style={styles.avatarPlaceholder} />
+        {item.other?.avatar_url ? (
+          <Image
+            source={{ uri: item.other.avatar_url }}
+            style={styles.avatar}
+          />
+        ) : (
+          <View style={styles.avatarPlaceholder} />
+        )}
       </View>
       <View style={styles.mid}>
         <Text style={styles.title}>{item.other?.username ?? "Unknown"}</Text>
@@ -246,11 +283,19 @@ export default function ChatListScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={chats}
-        keyExtractor={(i) => i.id}
-        renderItem={renderItem}
-      />
+      {chats.length === 0 ? (
+        <View style={{ padding: 20 }}>
+          <Text style={{ color: "#6b7280" }}>
+            No chats yet. Start a conversation from a listing or saved profile.
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={chats}
+          keyExtractor={(i) => i.id}
+          renderItem={renderItem}
+        />
+      )}
     </View>
   );
 }
@@ -265,6 +310,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   left: { width: 48, alignItems: "center", justifyContent: "center" },
+  avatar: { width: 40, height: 40, borderRadius: 20 },
   avatarPlaceholder: {
     width: 40,
     height: 40,
