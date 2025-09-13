@@ -10,17 +10,21 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Platform,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "@/lib/supabase";
-import { Platform } from "react-native";
+
+import * as FileSystem from "expo-file-system";
+import { decode as base64Decode } from "base64-arraybuffer";
+import uuid from "react-native-uuid";
 
 export default function EditProfileScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
-  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null); // can be local uri or public url
   const [searchingRoommate, setSearchingRoommate] = useState(false);
   const [location, setLocation] = useState("");
   const [age, setAge] = useState("");
@@ -34,60 +38,169 @@ export default function EditProfileScreen({ navigation }: any) {
 
   const load = async () => {
     setLoading(true);
-    const { data: userResp } = await supabase.auth.getUser();
-    const uid = userResp?.user?.id;
-    if (!uid) {
-      Alert.alert("Not signed in");
+    try {
+      const { data: userResp } = await supabase.auth.getUser();
+      const uid = userResp?.user?.id;
+      if (!uid) {
+        Alert.alert("Not signed in");
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", uid)
+        .maybeSingle();
+      if (error) {
+        console.error("load profile error", error);
+      } else if (data) {
+        setProfile(data);
+        setUsername(data.username || "");
+        setFullName(data.full_name || "");
+        setAvatarUri(data.avatar_url || null);
+        setSearchingRoommate(!!data.searching_roommate);
+        setLocation(data.location || "");
+        setAge(data.age ? String(data.age) : "");
+        setReligion(data.religion || "");
+        setDepartment(data.department || "");
+        setBio(data.bio || "");
+      }
+    } catch (e) {
+      console.error("load profile unexpected error", e);
+      Alert.alert("Error", "Could not load profile.");
+    } finally {
       setLoading(false);
-      return;
     }
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", uid)
-      .maybeSingle();
-    if (error) {
-      console.error("load profile error", error);
-    } else if (data) {
-      setProfile(data);
-      setUsername(data.username || "");
-      setFullName(data.full_name || "");
-      setAvatarUri(data.avatar_url || null);
-      setSearchingRoommate(!!data.searching_roommate);
-      setLocation(data.location || "");
-      setAge(data.age ? String(data.age) : "");
-      setReligion(data.religion || "");
-      setDepartment(data.department || "");
-      setBio(data.bio || "");
-    }
-    setLoading(false);
   };
 
+  // open image picker
   const pickImage = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      quality: 0.7,
-    });
-    if (res.canceled || !res.assets || res.assets.length === 0) return;
-    setAvatarUri(res.assets[0].uri);
+    try {
+      // request permission on native platforms
+      if (Platform.OS !== "web") {
+        const permission =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (permission.status !== "granted") {
+          Alert.alert(
+            "Permission required",
+            "We need permission to access your photos."
+          );
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setAvatarUri(result.assets[0].uri);
+      }
+    } catch (e: any) {
+      console.warn("pickImage error", e);
+      Alert.alert("Image error", "Could not open image picker.");
+    }
   };
 
-  async function uriToFile(
-    uri: string,
-    fileName: string
-  ): Promise<File | Blob> {
-    if (Platform.OS === "web") {
-      // @ts-ignore: web picker returns File[]
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      return new File([blob], fileName, { type: blob.type });
-    } else {
-      const response = await fetch(uri);
-      return await response.blob();
+  const getFileExt = (uri: string) => {
+    // handles file.jpg?params and data URI fallback
+    const m = uri.match(/\.([a-zA-Z0-9]+)(\?|$)/);
+    if (m) return m[1].toLowerCase();
+    if (uri.startsWith("data:")) {
+      const t = uri.match(/data:(image\/[a-zA-Z]+);base64,/);
+      if (t) return t[1].split("/")[1];
     }
-  }
+    return "jpg";
+  };
 
+  const makeFilename = (ext: string) => {
+    let id: string;
+    try {
+      // react-native-uuid provides v4 as a function
+      id =
+        typeof uuid.v4 === "function" ? (uuid.v4() as string) : String(uuid.v4);
+    } catch {
+      id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    }
+    return `${id}.${ext}`;
+  };
+
+  // unified storage uploader (web + native)
+  const uploadImageToStorage = async (uri: string, uid: string) => {
+    const bucket = "avatars";
+    const ext = getFileExt(uri).replace("jpeg", "jpg");
+    const filename = makeFilename(ext);
+    const path = `${uid}/${filename}`;
+    const mime = ext === "png" ? "image/png" : "image/jpeg";
+
+    // WEB flow: fetch -> blob -> upload
+    if (Platform.OS === "web") {
+      try {
+        const resp = await fetch(uri);
+        const blob = await resp.blob();
+
+        const { error: uploadError } = await supabase.storage
+          .from(bucket)
+          .upload(path, blob, {
+            contentType: mime,
+            upsert: true,
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+        return data.publicUrl;
+      } catch (err: any) {
+        console.warn("upload (web) failed:", err);
+        throw new Error(err?.message || "Web upload failed.");
+      }
+    }
+
+    // NATIVE flow: try expo-file-system -> base64 -> ArrayBuffer upload
+    try {
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const arrayBuffer = base64Decode(base64);
+
+      // supabase-js accepts ArrayBuffer/Uint8Array
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(path, arrayBuffer as any, {
+          contentType: mime,
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      return data.publicUrl;
+    } catch (err: any) {
+      console.warn("upload (native) failed:", err);
+      // fallback: try fetch -> blob (some RN environments support fetch on file://)
+      try {
+        const resp = await fetch(uri);
+        const blob = await resp.blob();
+        const { error: uploadError2 } = await supabase.storage
+          .from(bucket)
+          .upload(path, blob, {
+            contentType: mime,
+            upsert: true,
+          });
+        if (uploadError2) throw uploadError2;
+        const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+        return data.publicUrl;
+      } catch (fallbackErr: any) {
+        console.warn("upload fallback failed:", fallbackErr);
+        throw new Error(fallbackErr?.message || "Native upload failed.");
+      }
+    }
+  };
+
+  // wrapper used by save routine
   const uploadAvatarIfNeeded = async (uri: string | null) => {
     if (!uri) return profile?.avatar_url ?? null;
     if (uri.startsWith("http")) return uri;
@@ -96,21 +209,8 @@ export default function EditProfileScreen({ navigation }: any) {
     const uid = userResp?.user?.id;
     if (!uid) throw new Error("Not signed in");
 
-    const ext = uri.split(".").pop()?.split("?")[0] || "jpg";
-    const path = `avatars/${uid}/${Date.now()}.${ext}`;
-
-    const fileOrBlob = await uriToFile(uri, `avatar.${ext}`);
-
-    const { error } = await supabase.storage
-      .from("avatars")
-      .upload(path, fileOrBlob, {
-        upsert: true,
-        contentType: (fileOrBlob as any).type || "image/jpeg",
-      });
-    if (error) throw error;
-
-    const { data } = supabase.storage.from("avatars").getPublicUrl(path);
-    return data.publicUrl;
+    const publicUrl = await uploadImageToStorage(uri, uid);
+    return publicUrl;
   };
 
   const handleSave = async () => {
@@ -120,25 +220,28 @@ export default function EditProfileScreen({ navigation }: any) {
       const uid = userResp?.user?.id;
       if (!uid) throw new Error("Not signed in");
 
-      // username uniqueness check
+      // username validation
       if (!username.trim()) {
         Alert.alert("Validation", "Username cannot be empty");
         setLoading(false);
         return;
       }
 
+      // check uniqueness (allow same username if it's your existing row)
       const { data: existing } = await supabase
         .from("profiles")
         .select("id")
         .eq("username", username.trim())
         .limit(1);
+
       if (existing && existing.length > 0 && existing[0].id !== uid) {
         Alert.alert("Username taken", "Choose another username.");
         setLoading(false);
         return;
       }
 
-      const avatar_url = await uploadAvatarIfNeeded(avatarUri);
+      // upload avatar if needed
+      let avatar_url = await uploadAvatarIfNeeded(avatarUri);
       const ageNum = age ? parseInt(age, 10) : null;
 
       const { error } = await supabase
@@ -157,11 +260,23 @@ export default function EditProfileScreen({ navigation }: any) {
         .eq("id", uid);
 
       if (error) throw error;
+
       Alert.alert("Saved", "Profile updated");
+      // update local state so UI reflects public avatar URL
+      setProfile((p: any) => ({ ...p, avatar_url }));
+      setAvatarUri(avatar_url);
       navigation.goBack();
     } catch (e: any) {
       console.error("save profile error", e);
-      Alert.alert("Error", e.message || "Could not save");
+      // provide friendly fallback message for network/storage issues
+      if (e?.message && e.message.includes("Network request failed")) {
+        Alert.alert(
+          "Upload failed",
+          "Network failed while uploading. Check your connection and try again."
+        );
+      } else {
+        Alert.alert("Error", e.message || "Could not save");
+      }
     } finally {
       setLoading(false);
     }

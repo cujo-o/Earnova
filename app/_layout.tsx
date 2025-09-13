@@ -156,7 +156,9 @@ function RootNavigator() {
   return (
     <NavigationIndependentTree>
       <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Navigator
+          screenOptions={{ headerShown: false }}
+        >
           {user ? (
             <Stack.Screen name="Tabs" component={Tabs} />
           ) : (
