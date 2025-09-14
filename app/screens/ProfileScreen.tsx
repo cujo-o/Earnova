@@ -264,7 +264,10 @@ export default function ProfileScreen() {
             onPress={() => (navigation as any).navigate("EditProfile")}
           >
             {profile?.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
+              <Image
+                source={{ uri: profile.avatar_url }}
+                style={styles.avatar}
+              />
             ) : (
               <View style={[styles.avatar, styles.avatarPlaceholder]}>
                 <Text style={{ color: "#111" }}>Add</Text>
@@ -279,14 +282,25 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <TouchableOpacity
-          style={styles.logout}
-          onPress={async () => {
-            await supabase.auth.signOut();
-          }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "700" }}>Logout</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          {/* Settings button */}
+          <TouchableOpacity
+            style={styles.settingsBtn}
+            onPress={() => (navigation as any).navigate("Settings")}
+          >
+            <Ionicons name="settings-outline" size={20} color="#fff" />
+          </TouchableOpacity>
+
+          {/* Logout quick button */}
+          <TouchableOpacity
+            style={styles.logout}
+            onPress={async () => {
+              await supabase.auth.signOut();
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700" }}>Logout</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Liked Profiles */}
@@ -308,7 +322,9 @@ export default function ProfileScreen() {
               return (
                 <View style={styles.savedCard}>
                   <Image
-                    source={{ uri: p.avatar_url ?? "https://placehold.co/80x80" }}
+                    source={{
+                      uri: p.avatar_url ?? "https://placehold.co/80x80",
+                    }}
                     style={styles.savedAvatar}
                   />
                   <Text style={{ fontWeight: "700" }}>
@@ -344,7 +360,11 @@ export default function ProfileScreen() {
                       }}
                       style={[styles.smallBtn, { marginLeft: 8 }]}
                     >
-                      <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                      <Ionicons
+                        name="trash-outline"
+                        size={16}
+                        color="#ef4444"
+                      />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -371,7 +391,9 @@ export default function ProfileScreen() {
               return (
                 <View style={styles.savedCard}>
                   <Image
-                    source={{ uri: p.avatar_url ?? "https://placehold.co/80x80" }}
+                    source={{
+                      uri: p.avatar_url ?? "https://placehold.co/80x80",
+                    }}
                     style={styles.savedAvatar}
                   />
                   <Text style={{ fontWeight: "700" }}>
@@ -392,7 +414,11 @@ export default function ProfileScreen() {
                       onPress={() => removeSaved(p.id)}
                       style={[styles.smallBtn, { marginLeft: 8 }]}
                     >
-                      <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                      <Ionicons
+                        name="trash-outline"
+                        size={16}
+                        color="#ef4444"
+                      />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -464,15 +490,43 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: 16,
   },
+  settingsBtn: {
+    backgroundColor: "#2563eb",
+    padding: 8,
+    borderRadius: 8,
+    marginRight: 8,
+  },
   avatar: { width: 80, height: 80, borderRadius: 40 },
-  avatarPlaceholder: { backgroundColor: "#f3f4f6", alignItems: "center", justifyContent: "center" },
+  avatarPlaceholder: {
+    backgroundColor: "#f3f4f6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   name: { fontSize: 18, fontWeight: "800" },
   username: { color: "#6b7280" },
   logout: { backgroundColor: "#ef4444", padding: 10, borderRadius: 8 },
   sectionTitle: { fontWeight: "800", fontSize: 16, marginBottom: 8 },
-  savedCard: { width: 120, padding: 10, marginRight: 12, backgroundColor: "#f8fafc", borderRadius: 10, alignItems: "center" },
+  savedCard: {
+    width: 120,
+    padding: 10,
+    marginRight: 12,
+    backgroundColor: "#f8fafc",
+    borderRadius: 10,
+    alignItems: "center",
+  },
   savedAvatar: { width: 60, height: 60, borderRadius: 30, marginBottom: 6 },
-  smallBtn: { backgroundColor: "#fff", padding: 8, borderRadius: 8, borderWidth: 1, borderColor: "#e5e7eb" },
+  smallBtn: {
+    backgroundColor: "#fff",
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
   listingCard: { width: 160, marginRight: 12 },
-  listingImage: { width: 160, height: 100, borderRadius: 8, backgroundColor: "#f3f4f6" },
+  listingImage: {
+    width: 160,
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: "#f3f4f6",
+  },
 });

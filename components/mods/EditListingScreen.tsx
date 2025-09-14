@@ -3,14 +3,17 @@ import {
   View,
   Text,
   TextInput,
-  Button,
-  StyleSheet,
-  Image,
   TouchableOpacity,
+  Image,
   Alert,
   ScrollView,
+  StyleSheet,
+  ActivityIndicator,
+  Platform,
 } from "react-native";
-import * as ImagePicker from "expo-image-picker";
+import * as ImagePicker from "expo-image-picker"; 
+import * as FileSystem from "expo-file-system";
+import { decode as base64Decode } from "base64-arraybuffer";
 import uuid from "react-native-uuid";
 import { supabase } from "@/lib/supabase";
 
@@ -26,12 +29,15 @@ export default function EditListingScreen({ route, navigation }: Props) {
   const [price, setPrice] = useState("");
   const [description, setDescription] = useState("");
   const [thumbnail, setThumbnail] = useState<string | null>(null);
+  const [newImage, setNewImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchListing();
   }, []);
 
   const fetchListing = async () => {
+    setLoading(true);
     const { data, error } = await supabase
       .from("listings")
       .select("title, price, description, thumbnail_url")
@@ -47,74 +53,120 @@ export default function EditListingScreen({ route, navigation }: Props) {
       setDescription(data.description || "");
       setThumbnail(data.thumbnail_url);
     }
+    setLoading(false);
   };
 
   const pickImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permission.status !== "granted") {
+      Alert.alert("Permission required", "We need access to your photos.");
+      return;
+    }
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      quality: 0.7,
+      aspect: [4, 3],
+      quality: 0.8,
     });
 
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      setThumbnail(asset.uri);
+    if (!result.canceled && result.assets?.length > 0) {
+      setNewImage(result.assets[0].uri);
+    }
+  };
+
+  const getFileExt = (uri: string) => {
+    const m = uri.match(/\.([a-zA-Z0-9]+)(\?|$)/);
+    if (m) return m[1].toLowerCase();
+    return "jpg";
+  };
+
+  const uploadImageToStorage = async (uri: string) => {
+    const bucket = "listing-thumbnails";
+    const ext = getFileExt(uri).replace("jpeg", "jpg");
+    const filename = `${uuid.v4()}.${ext}`;
+    const path = `${listingId}/${filename}`;
+    const mime = ext === "png" ? "image/png" : "image/jpeg";
+
+    if (Platform.OS === "web") {
+      const resp = await fetch(uri);
+      const blob = await resp.blob();
+      const { error } = await supabase.storage.from(bucket).upload(path, blob, {
+        contentType: mime,
+        upsert: true,
+      });
+      if (error) throw error;
+      return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+    }
+
+    try {
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const arrayBuffer = base64Decode(base64);
+      const { error } = await supabase.storage
+        .from(bucket)
+        .upload(path, arrayBuffer as any, {
+          contentType: mime,
+          upsert: true,
+        });
+      if (error) throw error;
+      return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+    } catch (e) {
+      // fallback: fetch->blob
+      const resp = await fetch(uri);
+      const blob = await resp.blob();
+      const { error } = await supabase.storage.from(bucket).upload(path, blob, {
+        contentType: mime,
+        upsert: true,
+      });
+      if (error) throw error;
+      return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
     }
   };
 
   const handleUpdate = async () => {
-    let imageUrl = thumbnail;
-
-    // If user picked a new image, upload to Supabase Storage
-    if (thumbnail && thumbnail.startsWith("file://")) {
-      const ext = thumbnail.split(".").pop();
-      const fileName = `${uuid.v4()}.${ext}`;
-      const filePath = `thumbnails/${fileName}`;
-
-      const img = await fetch(thumbnail);
-      const blob = await img.blob();
-
-      const { error: uploadError } = await supabase.storage
-        .from("listing-thumbnails")
-        .upload(filePath, blob, {
-          contentType: "image/jpeg",
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error(uploadError);
-        Alert.alert("Error uploading image");
-        return;
+    setLoading(true);
+    try {
+      let imageUrl = thumbnail;
+      if (newImage) {
+        imageUrl = await uploadImageToStorage(newImage);
       }
 
-      const { data: publicUrl } = supabase.storage
-        .from("listing-thumbnails")
-        .getPublicUrl(filePath);
+      const { error } = await supabase
+        .from("listings")
+        .update({
+          title,
+          price: parseFloat(price),
+          description,
+          thumbnail_url: imageUrl,
+        })
+        .eq("id", listingId);
 
-      imageUrl = publicUrl.publicUrl;
-    }
+      if (error) throw error;
 
-    const { error } = await supabase
-      .from("listings")
-      .update({
-        title,
-        price: parseFloat(price),
-        description,
-        thumbnail_url: imageUrl,
-      })
-      .eq("id", listingId);
-
-    if (error) {
-      console.error(error);
-      Alert.alert("Error updating listing");
-    } else {
-      Alert.alert("Listing updated successfully");
+      Alert.alert("Success", "Listing updated successfully");
       navigation.goBack();
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("Error", e.message || "Could not update listing");
+    } finally {
+      setLoading(false);
     }
   };
 
+  if (loading) {
+    return (
+      <View style={styles.loader}>
+        <ActivityIndicator size="large" color="#2563eb" />
+      </View>
+    );
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.heading}>Edit Listing</Text>
+
       <Text style={styles.label}>Title</Text>
       <TextInput
         style={styles.input}
@@ -134,7 +186,7 @@ export default function EditListingScreen({ route, navigation }: Props) {
 
       <Text style={styles.label}>Description</Text>
       <TextInput
-        style={[styles.input, { height: 100 }]}
+        style={[styles.input, styles.textarea]}
         value={description}
         onChangeText={setDescription}
         placeholder="Enter description"
@@ -142,52 +194,106 @@ export default function EditListingScreen({ route, navigation }: Props) {
       />
 
       <Text style={styles.label}>Thumbnail</Text>
-      {thumbnail ? (
-        <Image source={{ uri: thumbnail }} style={styles.image} />
+      {newImage || thumbnail ? (
+        <Image
+          source={{ uri: newImage || thumbnail || "" }}
+          style={styles.image}
+        />
       ) : (
-        <Text>No Image Selected</Text>
+        <View style={styles.imagePlaceholder}>
+          <Text style={{ color: "#888" }}>No image selected</Text>
+        </View>
       )}
-      <TouchableOpacity onPress={pickImage} style={styles.button}>
-        <Text style={styles.buttonText}>Pick Image</Text>
+
+      <TouchableOpacity style={styles.secondaryBtn} onPress={pickImage}>
+        <Text style={styles.secondaryBtnText}>
+          {newImage ? "Change Image" : "Pick Image"}
+        </Text>
       </TouchableOpacity>
 
-      <Button title="Update Listing" onPress={handleUpdate} />
+      <TouchableOpacity style={styles.primaryBtn} onPress={handleUpdate}>
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.primaryBtnText}>Update Listing</Text>
+        )}
+      </TouchableOpacity>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
-    backgroundColor: "#fff",
+    padding: 20,
+    backgroundColor: "#f9fafb",
+  },
+  heading: {
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 16,
+    textAlign: "center",
+    color: "#111827",
   },
   label: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "600",
     marginTop: 12,
+    color: "#374151",
   },
   input: {
     borderWidth: 1,
-    borderColor: "#ccc",
-    padding: 8,
-    borderRadius: 8,
+    borderColor: "#d1d5db",
+    padding: 12,
+    borderRadius: 10,
     marginTop: 6,
+    backgroundColor: "#fff",
+  },
+  textarea: {
+    height: 120,
+    textAlignVertical: "top",
   },
   image: {
     width: "100%",
     height: 200,
-    borderRadius: 8,
-    marginVertical: 10,
+    borderRadius: 12,
+    marginVertical: 12,
   },
-  button: {
-    backgroundColor: "#2563eb",
-    padding: 12,
-    borderRadius: 8,
-    marginVertical: 10,
+  imagePlaceholder: {
+    width: "100%",
+    height: 200,
+    borderRadius: 12,
+    marginVertical: 12,
+    backgroundColor: "#e5e7eb",
+    justifyContent: "center",
     alignItems: "center",
   },
-  buttonText: {
+  primaryBtn: {
+    backgroundColor: "#2563eb",
+    padding: 16,
+    borderRadius: 10,
+    alignItems: "center",
+    marginTop: 16,
+  },
+  primaryBtnText: {
     color: "#fff",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+  secondaryBtn: {
+    borderWidth: 1,
+    borderColor: "#2563eb",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  secondaryBtnText: {
+    color: "#2563eb",
     fontWeight: "600",
+  },
+  loader: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
   },
 });

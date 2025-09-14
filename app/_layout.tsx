@@ -23,6 +23,14 @@ import RoommateSwipeScreen from "./screens/RoommateSwipeScreen";
 import CreateProfileModal from "@/components/mods/CreateProfileModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
 
+//settings import
+import SettingsScreen from "./screens/settings/SettingsScreen";
+import AccountSettings from "./screens/settings/AccountSettings";
+import NotificationSettings from "./screens/settings/NotificationSettings";
+import PrivacySettings from "./screens/settings/PrivacySettings";
+import AppearanceSettings from "./screens/settings/AppearanceSettings";
+import AboutScreen from "./screens/settings/AboutScreen";
+
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -156,9 +164,7 @@ function RootNavigator() {
   return (
     <NavigationIndependentTree>
       <NavigationContainer>
-        <Stack.Navigator
-          screenOptions={{ headerShown: false }}
-        >
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
           {user ? (
             <Stack.Screen name="Tabs" component={Tabs} />
           ) : (
@@ -172,6 +178,12 @@ function RootNavigator() {
           <Stack.Screen name="ChatScreen" component={ChatScreen} />
           <Stack.Screen name="EditListing" component={EditListingScreen} />
           <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+          <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="AccountSettings" component={AccountSettings} />
+          <Stack.Screen name="NotificationSettings" component={NotificationSettings} />
+          <Stack.Screen name="PrivacySettings" component={PrivacySettings} />
+          <Stack.Screen name="AppearanceSettings" component={AppearanceSettings} />
+          <Stack.Screen name="AboutScreen" component={AboutScreen} />
         </Stack.Navigator>
 
         {/* Modal overlay — forced when showProfileModal is true */}
