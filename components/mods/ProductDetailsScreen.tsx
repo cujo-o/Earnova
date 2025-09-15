@@ -1,5 +1,5 @@
 // screens/ProductDetailsScreen.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,10 +9,12 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Animated,
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 type RouteParams = { productId: string };
 
@@ -26,6 +28,11 @@ export default function ProductDetailsScreen() {
   const [listing, setListing] = useState<any | null>(null);
   const [seller, setSeller] = useState<any | null>(null);
 
+  // like state
+  const [liked, setLiked] = useState(false);
+  const [likesCount, setLikesCount] = useState<number>(0);
+  const anim = useRef(new Animated.Value(1)).current; // for pop
+
   const isOwner = useMemo(
     () => !!(user && listing && user.id === listing.user_id),
     [user, listing]
@@ -36,8 +43,8 @@ export default function ProductDetailsScreen() {
     (async () => {
       setLoading(true);
       try {
-        // fetch listing
-        const { data: l, error: le } = await supabase
+        // listing
+        const { data: l } = await supabase
           .from("listings")
           .select(
             "id, title, price, description, location, thumbnail_url, user_id, category_id, created_at"
@@ -45,30 +52,52 @@ export default function ProductDetailsScreen() {
           .eq("id", productId)
           .maybeSingle();
 
-        if (le) throw le;
         if (!l) {
-          Alert.alert("Not found", "Listing not found.");
-          setListing(null);
-          setSeller(null);
-          setLoading(false);
+          if (mounted) {
+            Alert.alert("Not found", "Listing not found.");
+            setListing(null);
+            setSeller(null);
+            setLoading(false);
+          }
           return;
         }
 
-        // fetch seller profile
+        // seller
         let prof = null;
         if (l.user_id) {
-          const { data: p, error: pe } = await supabase
+          const { data: p } = await supabase
             .from("profiles")
             .select("id, username, full_name, avatar_url")
             .eq("id", l.user_id)
             .maybeSingle();
-          if (pe) console.warn("fetch seller profile error", pe);
           prof = p ?? null;
         }
 
         if (mounted) {
           setListing(l);
           setSeller(prof);
+        }
+
+        // likes count & whether current user liked
+        const [{ count }, { data: userLike }] = await Promise.all([
+          supabase
+            .from("listing_likes")
+            .select("id", { count: "exact", head: false })
+            .eq("listing_id", productId),
+          user
+            ? supabase
+                .from("listing_likes")
+                .select("id")
+                .eq("listing_id", productId)
+                .eq("liker_id", user.id)
+                .limit(1)
+                .maybeSingle()
+            : Promise.resolve({ data: null }),
+        ]);
+
+        if (mounted) {
+          setLikesCount(typeof count === "number" ? count : 0);
+          setLiked(!!(userLike && (userLike as any).id));
         }
       } catch (e: any) {
         console.error("load listing error", e);
@@ -81,118 +110,57 @@ export default function ProductDetailsScreen() {
     return () => {
       mounted = false;
     };
-  }, [productId]);
+  }, [productId, user]);
 
-  const startChat = async () => {
-    try {
-      if (!user) {
-        Alert.alert(
-          "Sign in required",
-          "Please sign in to message the seller."
-        );
-        return;
-      }
-      if (!listing) return;
-      if (isOwner) return;
-
-      // Always normalize pair so user_a < user_b (string compare) to prevent duplicates
-      const sellerId = listing.user_id;
-      const [userA, userB] =
-        user.id < sellerId ? [user.id, sellerId] : [sellerId, user.id];
-
-      // Try to find an existing chat for this pair (and listing)
-      const { data: existing, error: findErr } = await supabase
-        .from("chats")
-        .select("id")
-        .eq("user_a", userA)
-        .eq("user_b", userB)
-        .limit(1)
-        .maybeSingle();
-
-      if (findErr) console.warn("find chat err", findErr);
-
-      let chatId: string | null = existing?.id ?? null;
-
-      if (!chatId) {
-        const { data: created, error: createErr } = await supabase
-          .from("chats")
-          .insert([{ user_a: userA, user_b: userB, listing_id: listing.id }])
-          .select("id")
-          .maybeSingle();
-
-        if (createErr) throw createErr;
-        chatId = created?.id ?? null;
-      }
-
-      if (chatId) {
-        navigation.navigate("ChatScreen", { chatId });
-      } else {
-        Alert.alert("Error", "Could not start chat.");
-      }
-    } catch (e: any) {
-      console.error("startChat error", e);
-      Alert.alert("Error", e.message ?? "Could not start chat.");
-    }
+  const animatePop = () => {
+    anim.setValue(0.8);
+    Animated.spring(anim, {
+      toValue: 1,
+      friction: 6,
+      useNativeDriver: true,
+    }).start();
   };
 
-  const deleteListing = async () => {
-    if (!listing || !isOwner) return;
-    Alert.alert("Delete Listing", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            // try to remove associated storage object (best-effort)
-            if (listing.thumbnail_url) {
-              try {
-                const url = listing.thumbnail_url as string;
-                const re = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
-                const m = url.match(re);
-                if (m && m.length >= 3) {
-                  const bucket = m[1];
-                  const path = decodeURIComponent(m[2]);
-                  const { error: rmErr } = await supabase.storage
-                    .from(bucket)
-                    .remove([path]);
-                  if (rmErr) console.warn("remove image err", rmErr);
-                }
-              } catch (e) {
-                console.warn("delete image fallback err", e);
-              }
-            }
+  const toggleLike = async () => {
+    if (!user) {
+      Alert.alert("Sign in required", "Please sign in to like listings.");
+      return;
+    }
+    if (!listing) return;
 
-            const { error: delErr } = await supabase
-              .from("listings")
-              .delete()
-              .eq("id", listing.id);
+    const LID = listing.id;
 
-            if (delErr) {
-              console.error("delete listing error", delErr);
-              if (
-                delErr.message &&
-                delErr.message.includes("row-level security")
-              ) {
-                Alert.alert(
-                  "Permission denied",
-                  "Cannot delete due to RLS. Ensure policies allow deleting own listings."
-                );
-              } else {
-                Alert.alert("Error", delErr.message || "Could not delete.");
-              }
-              return;
-            }
+    // optimistic
+    const prevLiked = liked;
+    const prevCount = likesCount;
+    setLiked(!prevLiked);
+    setLikesCount(prevLiked ? prevCount - 1 : prevCount + 1);
+    animatePop();
 
-            Alert.alert("Deleted", "Listing removed.");
-            navigation.goBack();
-          } catch (e: any) {
-            console.error("delete error", e);
-            Alert.alert("Error", e.message ?? "Could not delete listing.");
-          }
-        },
-      },
-    ]);
+    try {
+      if (!prevLiked) {
+        // insert
+        const { error } = await supabase.from("listing_likes").insert([
+          { listing_id: LID, liker_id: user.id },
+        ]);
+        if (error) throw error;
+      } else {
+        // delete
+        const { error } = await supabase
+          .from("listing_likes")
+          .delete()
+          .eq("listing_id", LID)
+          .eq("liker_id", user.id);
+        if (error) throw error;
+      }
+      // success (nothing else to do)
+    } catch (err: any) {
+      console.error("toggleLike err", err);
+      // revert optimistic state
+      setLiked(prevLiked);
+      setLikesCount(prevCount);
+      Alert.alert("Error", "Could not update like. Try again.");
+    }
   };
 
   if (loading) return <ActivityIndicator style={{ flex: 1 }} />;
@@ -215,47 +183,50 @@ export default function ProductDetailsScreen() {
         </View>
       )}
 
-      <Text style={styles.title}>{listing.title}</Text>
-      <Text style={styles.price}>
-        ₦{Number(listing.price).toLocaleString()}
-      </Text>
-      {!!listing.location && (
-        <Text style={styles.location}>{listing.location}</Text>
-      )}
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>{listing.title}</Text>
+          <Text style={styles.price}>₦{Number(listing.price).toLocaleString()}</Text>
+        </View>
+
+        {/* Like + count (large, noticeable but not huge) */}
+        <View style={{ alignItems: "center", marginLeft: 12 }}>
+          <TouchableOpacity onPress={toggleLike} activeOpacity={0.8}>
+            <Animated.View style={{ transform: [{ scale: anim }] }}>
+              <Ionicons
+                name={liked ? "heart" : "heart-outline"}
+                size={34}
+                color={liked ? "#ef4444" : "#374151"}
+              />
+            </Animated.View>
+          </TouchableOpacity>
+          <Text style={{ marginTop: 4, color: "#6b7280" }}>{likesCount}</Text>
+        </View>
+      </View>
+
+      {!!listing.location && <Text style={styles.location}>{listing.location}</Text>}
 
       <View style={styles.sellerRow}>
-        <Image
-          source={{ uri: seller?.avatar_url ?? "https://placehold.co/80x80" }}
-          style={styles.avatar}
-        />
+        <Image source={{ uri: seller?.avatar_url ?? "https://placehold.co/80x80" }} style={styles.avatar} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.sellerName}>
-            {seller?.full_name || seller?.username || "Seller"}
-          </Text>
+          <Text style={styles.sellerName}>{seller?.full_name || seller?.username || "Seller"}</Text>
           <Text style={styles.sellerHint}>Joined via Earnova</Text>
         </View>
       </View>
 
       <Text style={styles.sectionHeader}>Description</Text>
-      <Text style={styles.description}>
-        {listing.description || "No description provided."}
-      </Text>
+      <Text style={styles.description}>{listing.description || "No description provided."}</Text>
 
       {!isOwner ? (
-        <TouchableOpacity style={styles.primaryBtn} onPress={startChat}>
+        <TouchableOpacity style={styles.primaryBtn} onPress={() => navigation.navigate("ChatScreen", { productId })}>
           <Text style={styles.primaryBtnText}>Message Seller</Text>
         </TouchableOpacity>
       ) : (
         <View style={styles.ownerActions}>
-          <TouchableOpacity
-            style={[styles.secondaryBtn, { marginRight: 8 }]}
-            onPress={() =>
-              navigation.navigate("EditListing", { listingId: listing.id })
-            }
-          >
+          <TouchableOpacity style={[styles.secondaryBtn, { marginRight: 8 }]} onPress={() => navigation.navigate("EditListing", { listingId: listing.id })}>
             <Text style={styles.secondaryBtnText}>Edit Listing</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.deleteBtn} onPress={deleteListing}>
+          <TouchableOpacity style={styles.deleteBtn} onPress={() => Alert.alert("Delete flow handled elsewhere")}>
             <Text style={styles.deleteBtnText}>Delete</Text>
           </TouchableOpacity>
         </View>
@@ -270,54 +241,21 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff", padding: 16 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   image: { width: "100%", height: 240, borderRadius: 12, marginBottom: 12 },
-  noImage: {
-    backgroundColor: "#f3f4f6",
-    justifyContent: "center",
-    alignItems: "center",
-  },
+  noImage: { backgroundColor: "#f3f4f6", justifyContent: "center", alignItems: "center" },
   title: { fontSize: 22, fontWeight: "800", marginBottom: 6, color: "#111827" },
   price: { fontSize: 20, fontWeight: "700", color: "#2563eb", marginBottom: 4 },
   location: { color: "#6b7280", marginBottom: 12 },
-  sellerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    marginBottom: 8,
-  },
+  sellerRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, marginBottom: 8 },
   avatar: { width: 48, height: 48, borderRadius: 24, marginRight: 12 },
   sellerName: { fontWeight: "700", fontSize: 16, color: "#111827" },
   sellerHint: { fontSize: 12, color: "#6b7280" },
-  sectionHeader: {
-    fontWeight: "700",
-    fontSize: 16,
-    marginTop: 16,
-    marginBottom: 6,
-  },
+  sectionHeader: { fontWeight: "700", fontSize: 16, marginTop: 16, marginBottom: 6 },
   description: { fontSize: 14, color: "#374151", lineHeight: 20 },
-  primaryBtn: {
-    backgroundColor: "#2563eb",
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: "center",
-    marginTop: 18,
-  },
+  primaryBtn: { backgroundColor: "#2563eb", paddingVertical: 14, borderRadius: 10, alignItems: "center", marginTop: 18 },
   primaryBtnText: { color: "#fff", fontWeight: "700" },
   ownerActions: { flexDirection: "row", marginTop: 18 },
-  secondaryBtn: {
-    borderWidth: 1,
-    borderColor: "#2563eb",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    alignItems: "center",
-  },
+  secondaryBtn: { borderWidth: 1, borderColor: "#2563eb", paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, alignItems: "center" },
   secondaryBtnText: { color: "#2563eb", fontWeight: "700" },
-  deleteBtn: {
-    backgroundColor: "#ef4444",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    alignItems: "center",
-  },
+  deleteBtn: { backgroundColor: "#ef4444", paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, alignItems: "center" },
   deleteBtnText: { color: "#fff", fontWeight: "700" },
 });

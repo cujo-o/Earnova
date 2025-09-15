@@ -22,7 +22,6 @@ import ChatListScreen from "@/components/mods/ChatListScreen";
 import RoommateSwipeScreen from "./screens/RoommateSwipeScreen";
 import CreateProfileModal from "@/components/mods/CreateProfileModal";
 import Ionicons from "@expo/vector-icons/Ionicons";
-
 //settings import
 import SettingsScreen from "./screens/settings/SettingsScreen";
 import AccountSettings from "./screens/settings/AccountSettings";
@@ -180,9 +179,15 @@ function RootNavigator() {
           <Stack.Screen name="EditProfile" component={EditProfileScreen} />
           <Stack.Screen name="Settings" component={SettingsScreen} />
           <Stack.Screen name="AccountSettings" component={AccountSettings} />
-          <Stack.Screen name="NotificationSettings" component={NotificationSettings} />
+          <Stack.Screen
+            name="NotificationSettings"
+            component={NotificationSettings}
+          />
           <Stack.Screen name="PrivacySettings" component={PrivacySettings} />
-          <Stack.Screen name="AppearanceSettings" component={AppearanceSettings} />
+          <Stack.Screen
+            name="AppearanceSettings"
+            component={AppearanceSettings}
+          />
           <Stack.Screen name="AboutScreen" component={AboutScreen} />
         </Stack.Navigator>
 
@@ -203,7 +208,7 @@ function RootNavigator() {
 export default function App() {
   return (
     <AuthProvider>
-      <RootNavigator />
+        <RootNavigator />
     </AuthProvider>
   );
 }
