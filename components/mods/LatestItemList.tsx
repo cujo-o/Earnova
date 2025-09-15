@@ -1,4 +1,4 @@
-// components/mods/LatestItemList.tsx  (or screens/LatestItemsList.tsx)
+// components/mods/LatestItemList.tsx
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -8,23 +8,16 @@ import {
   Image,
   StyleSheet,
   Animated,
-  Alert
+  Alert,
 } from "react-native";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { formatCount } from "@/lib/format";
 
-interface Listing {
-  id: string;
-  title: string;
-  price: number;
-  thumbnail_url: string | null;
-}
-
 export default function LatestItemsList({ navigation }: any) {
   const { user } = useAuth();
-  const [latest, setLatest] = useState<Listing[]>([]);
+  const [latest, setLatest] = useState<any[]>([]);
   const [likesMap, setLikesMap] = useState<
     Record<string, { count: number; liked: boolean }>
   >({});
@@ -34,44 +27,33 @@ export default function LatestItemsList({ navigation }: any) {
     fetchLatest();
   }, []);
 
-  useEffect(() => {
-    // initialize animated values
-    latest.forEach((l) => {
-      if (!animMap[l.id]) animMap[l.id] = new Animated.Value(1);
-    });
-  }, [latest]);
-
   const fetchLatest = async () => {
     const { data, error } = await supabase
       .from("listings")
       .select("id, title, price, thumbnail_url")
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(8);
 
     if (!error && data) {
       setLatest(data);
-      // bulk fetch counts for these IDs
       const ids = data.map((d: any) => d.id);
       if (ids.length > 0) {
-        const { data: counts, error: cErr } = await supabase
+        const { data: counts } = await supabase
           .from("listing_likes")
           .select("listing_id, liker_id")
           .in("listing_id", ids);
-        if (!cErr) {
-          // build counts and liked flag for current user (if any)
-          const map: Record<string, { count: number; liked: boolean }> = {};
-          ids.forEach((id) => (map[id] = { count: 0, liked: false }));
-          (counts || []).forEach((r: any) => {
-            map[r.listing_id].count++;
-            if (user && r.liker_id === user.id) map[r.listing_id].liked = true;
-          });
-          setLikesMap(map);
-        }
+        const map: Record<string, { count: number; liked: boolean }> = {};
+        ids.forEach((id) => (map[id] = { count: 0, liked: false }));
+        (counts || []).forEach((r: any) => {
+          map[r.listing_id].count++;
+          if (user && r.liker_id === user.id) map[r.listing_id].liked = true;
+        });
+        setLikesMap(map);
       }
     }
   };
 
-  const doLikeToggle = async (item: Listing) => {
+  const doLikeToggle = async (item: any) => {
     if (!user) {
       Alert.alert("Sign in required", "Please sign in to like listings.");
       return;
@@ -85,7 +67,6 @@ export default function LatestItemsList({ navigation }: any) {
     };
     setLikesMap((m) => ({ ...m, [item.id]: optimistic }));
 
-    // animate
     const val = animMap[item.id] || new Animated.Value(1);
     animMap[item.id] = val;
     val.setValue(0.8);
@@ -111,12 +92,11 @@ export default function LatestItemsList({ navigation }: any) {
       }
     } catch (e) {
       console.error("doLikeToggle err", e);
-      // revert
       setLikesMap((m) => ({ ...m, [item.id]: prev }));
     }
   };
 
-  const renderItem = ({ item }: { item: Listing }) => {
+  const renderItem = ({ item }: any) => {
     const meta = likesMap[item.id] ?? { count: 0, liked: false };
     const scale = animMap[item.id] || new Animated.Value(1);
     return (
@@ -129,11 +109,11 @@ export default function LatestItemsList({ navigation }: any) {
         {item.thumbnail_url ? (
           <Image source={{ uri: item.thumbnail_url }} style={styles.image} />
         ) : (
-          <View style={[styles.image, styles.noImage]}>
-            <Text>No Img</Text>
-          </View>
+          <View style={[styles.image, styles.noImage]} />
         )}
-        <Text style={styles.title}>{item.title}</Text>
+        <Text numberOfLines={1} style={styles.title}>
+          {item.title}
+        </Text>
         <View
           style={{
             flexDirection: "row",
@@ -142,7 +122,6 @@ export default function LatestItemsList({ navigation }: any) {
           }}
         >
           <Text style={styles.price}>
-            {" "}
             ₦{Number(item.price).toLocaleString()}
           </Text>
           <TouchableOpacity
@@ -169,10 +148,9 @@ export default function LatestItemsList({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Latest Listings</Text>
       <FlatList
-        data={latest}
-        keyExtractor={(item) => item.id}
+        data={latest.slice(0, 4)}
+        keyExtractor={(i) => i.id}
         renderItem={renderItem}
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -183,23 +161,24 @@ export default function LatestItemsList({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { marginTop: 16 },
-  header: { fontSize: 18, fontWeight: "700", marginBottom: 8, marginLeft: 12 },
+  container: { marginTop: 4 },
   card: {
-    width: 140,
+    width: 160,
     backgroundColor: "#fff",
-    borderRadius: 10,
+    borderRadius: 12,
     marginRight: 12,
     padding: 8,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: "#eef2ff",
   },
-  image: { width: "100%", height: 100, borderRadius: 8, marginBottom: 6 },
-  noImage: {
-    justifyContent: "center",
-    alignItems: "center",
+  image: {
+    width: "100%",
+    height: 100,
+    borderRadius: 8,
+    marginBottom: 8,
     backgroundColor: "#f3f4f6",
   },
-  title: { fontSize: 14, fontWeight: "600", marginBottom: 2 },
-  price: { color: "#2563eb", fontWeight: "600" },
+  noImage: { justifyContent: "center", alignItems: "center" },
+  title: { fontSize: 14, fontWeight: "700", marginBottom: 4 },
+  price: { fontSize: 14, fontWeight: "800", color: "#2563eb" },
 });

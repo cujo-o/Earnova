@@ -29,6 +29,8 @@ import NotificationSettings from "./screens/settings/NotificationSettings";
 import PrivacySettings from "./screens/settings/PrivacySettings";
 import AppearanceSettings from "./screens/settings/AppearanceSettings";
 import AboutScreen from "./screens/settings/AboutScreen";
+import CategoryScreen from "./screens/CategoryScreen";
+import ListingsFilteredScreen from "./screens/ListingsFilteredScreen";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -179,16 +181,12 @@ function RootNavigator() {
           <Stack.Screen name="EditProfile" component={EditProfileScreen} />
           <Stack.Screen name="Settings" component={SettingsScreen} />
           <Stack.Screen name="AccountSettings" component={AccountSettings} />
-          <Stack.Screen
-            name="NotificationSettings"
-            component={NotificationSettings}
-          />
+          <Stack.Screen name="NotificationSettings"component={NotificationSettings} />
           <Stack.Screen name="PrivacySettings" component={PrivacySettings} />
-          <Stack.Screen
-            name="AppearanceSettings"
-            component={AppearanceSettings}
-          />
+          <Stack.Screen name="AppearanceSettings" component={AppearanceSettings} />
           <Stack.Screen name="AboutScreen" component={AboutScreen} />
+          <Stack.Screen name="Category" component={CategoryScreen} />
+          <Stack.Screen name="ListingsFiltered" component={ListingsFilteredScreen} />
         </Stack.Navigator>
 
         {/* Modal overlay — forced when showProfileModal is true */}
@@ -208,7 +206,7 @@ function RootNavigator() {
 export default function App() {
   return (
     <AuthProvider>
-        <RootNavigator />
+      <RootNavigator />
     </AuthProvider>
   );
 }
